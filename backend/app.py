@@ -8,15 +8,15 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from .models import Facility, Injection, topology, capacity_state
-from .engine import simulate, RATES, MODEL_NOTES
+from .engine import simulate, RATES, MODEL_NOTES, paired_comparison
 
-app = FastAPI(title='DC-Resilience API', version='1.0.0', description='Reproducible Monte Carlo data centre redundancy experiments. No paid APIs.')
+app = FastAPI(title='DC-Resilience API', version='1.1.0', description='Reproducible Monte Carlo data centre redundancy experiments. No paid APIs.')
 # Bound concurrent CPU jobs while leaving health/topology/failure injection responsive.
 slots = threading.BoundedSemaphore(2)
 
 @app.get('/api/health')
 def health():
-    return {'status': 'ok', 'engine': 'NumPy continuous-time Monte Carlo', 'version': '1.0.0'}
+    return {'status': 'ok', 'engine': 'NumPy continuous-time Monte Carlo', 'version': '1.1.0'}
 
 @app.get('/api/failure-rates')
 def rates():
@@ -35,7 +35,8 @@ def inject(body: Injection):
         raise HTTPException(422, f'Unknown component IDs: {", ".join(sorted(unknown))}')
     state = capacity_state(body.config, groups, set(body.failed_components))
     return {**state, 'downtime_minutes': 0 if state['service_maintained'] else body.duration_hours * 60,
-            'duration_hours': body.duration_hours}
+            'duration_hours': body.duration_hours,
+            'unserved_energy_kwh': state['lost_capacity_kw'] * body.duration_hours}
 
 
 def experiment(config: Facility, compare: bool):
@@ -53,7 +54,8 @@ def experiment(config: Facility, compare: bool):
                 'kind': 'comparison' if compare else 'simulation', 'config': config.model_dump(),
                 'duration_seconds': round(time.perf_counter()-start, 3), 'results': results,
                 'dataset_version': '2026-09-10-mixed-v1', 'failure_rates': RATES,
-                'model_notes': MODEL_NOTES, 'engine_version': '1.0.0'}
+                'model_notes': MODEL_NOTES, 'engine_version': '1.1.0',
+                'paired_comparisons': paired_comparison(results) if compare else []}
     finally:
         slots.release()
 
