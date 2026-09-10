@@ -8,3 +8,6 @@ __pycache__/
 *.log
 artifacts/
 .env
+*.tsbuildinfo
+playwright-report/
+test-results/

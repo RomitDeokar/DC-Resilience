@@ -7,7 +7,7 @@ Redundancy = Literal['N', 'N+1', '2N']
 TIERS = {'I': 99.671, 'II': 99.741, 'III': 99.982, 'IV': 99.995}
 
 class StrictModel(BaseModel):
-    model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
+    model_config = ConfigDict(extra='forbid', allow_inf_nan=False, str_strip_whitespace=True)
 
 class Power(StrictModel):
     redundancy: Redundancy = 'N+1'
@@ -75,24 +75,43 @@ def topology(config: Facility) -> list[dict]:
     return groups
 
 
+class CapacityTracker:
+    """Incremental capacity state shared by injection and the chronological engine."""
+    def __init__(self, config: Facility, groups: list[dict]):
+        self.config = config
+        self.failed = set()
+        self.units = {c['id']: c for g in groups for c in g['components']}
+        self.banks = {g['kind']: {b: sum(c['capacity_kw'] for c in g['components']
+                                      if c['bank'] == b) for b in ['A', 'B']} for g in groups}
+        self.power_kinds = ['UPS_MODULE', 'PDU', 'ATS']
+        if config.simulation.operating_mode == 'islanded':
+            self.power_kinds.append('GENERATOR')
+
+    def update(self, cid: str, failed: bool):
+        if failed == (cid in self.failed):
+            return
+        c = self.units[cid]
+        self.banks[c['kind']][c['bank']] += (-1 if failed else 1) * c['capacity_kw']
+        if failed:
+            self.failed.add(cid)
+        else:
+            self.failed.discard(cid)
+
+    def capacities(self):
+        # Select a complete train; never pool capacity across disconnected paths.
+        power = max(min(self.banks[k][b] for k in self.power_kinds) for b in ['A', 'B'])
+        cooling = max(self.banks['CRAC'].values())
+        return power, cooling, min(power, cooling)
+
+
 def capacity_state(config: Facility, groups: list[dict], failed: set[str]) -> dict:
-    capacities = {}
-    details = []
-    for group in groups:
-        banks = {bank: sum(c['capacity_kw'] for c in group['components']
-                          if c['bank'] == bank and c['id'] not in failed)
-                 for bank in ['A', 'B']}
-        capacities[group['kind']] = banks
-        available = max(banks.values()) if group['redundancy'] == '2N' else banks['A']
-        details.append({**group, 'surviving_capacity_kw': available,
-                        'healthy_units': sum(c['id'] not in failed for c in group['components'])})
-    power_kinds = ['UPS_MODULE', 'PDU', 'ATS']
-    if config.simulation.operating_mode == 'islanded':
-        power_kinds.append('GENERATOR')
-    # 2N is two independent complete trains, not a pooled bank with cross-ties.
-    power = max(min(capacities[k][b] for k in power_kinds) for b in ['A', 'B'])
-    cooling = max(capacities['CRAC'].values())
-    surviving = min(power, cooling)
+    tracker = CapacityTracker(config, groups)
+    for cid in failed:
+        tracker.update(cid, True)
+    power, cooling, surviving = tracker.capacities()
+    details = [{**g, 'surviving_capacity_kw': max(tracker.banks[g['kind']].values()),
+                'healthy_units': sum(c['id'] not in failed for c in g['components'])}
+               for g in groups]
     return {'groups': details, 'surviving_capacity_kw': surviving,
             'power_capacity_kw': power, 'cooling_capacity_kw': cooling,
             'required_capacity_kw': config.it_load_kw,

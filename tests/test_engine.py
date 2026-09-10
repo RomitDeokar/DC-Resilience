@@ -99,3 +99,96 @@ def test_comparison_and_nonoverlap_baseline():
     assert results[2]['infra_cost_index'] == 2
     assert results[1]['expected_annual_downtime_minutes'] == 0
     assert all(x['overlap_trials'] == 0 for x in results)
+
+
+def test_horizon_events_do_not_create_phantom_outage():
+    c = config('N')
+    result = evaluate_events(c, topology(c), [(10, 1, 'UPS-A01', 'UPS_MODULE')], 10)
+    assert result[0] == 0
+    assert result[2] == 10000
+
+
+def test_same_time_repair_precedes_failure():
+    c = config()
+    e = [(1, 1, 'UPS-A01', 'UPS_MODULE'), (3, 0, 'UPS-A01', 'UPS_MODULE'),
+         (3, 1, 'UPS-A02', 'UPS_MODULE'), (5, 0, 'UPS-A02', 'UPS_MODULE')]
+    result = evaluate_events(c, topology(c), e, 10)
+    assert result[0] == 0
+    assert not result[3]
+
+
+def test_unserved_energy_integral():
+    c = config('N')
+    e = [(1, 1, 'UPS-A01', 'UPS_MODULE'), (5, 0, 'UPS-A01', 'UPS_MODULE')]
+    down, energy, *_ = evaluate_events(c, topology(c), e, 10)
+    assert down == 4
+    assert energy == 10000
+
+
+def test_worst_trial_replay_matches_integrated_result():
+    c = config('N', n=100)
+    r = simulate(c)
+    w = r['worst_trial']
+    trace = w['timeline']
+    hours = sum(b['time_hours']-a['time_hours'] for a, b in zip(trace, trace[1:])
+                if not a['service_maintained'])
+    assert hours*60 == pytest.approx(w['downtime_minutes'])
+    assert w['downtime_minutes'] == max(t['annual_downtime_minutes'] for t in r['trial_results'])
+    assert trace[0]['action'] == 'start' and trace[-1]['action'] == 'end'
+    for point in trace:
+        expected = capacity_state(c, topology(c), set(point['failed_components']))
+        assert point['surviving_capacity_kw'] == expected['surviving_capacity_kw']
+
+
+def test_zero_outages_never_produce_perfect_certainty():
+    c = config()
+    c.simulation.failure_mode = 'single'
+    r = simulate(c)
+    assert r['availability_percent'] == 100
+    assert r['availability_ci95'][0] < 100
+    assert r['availability_ci_method'] == 'conservative-outage-risk-bound'
+    assert r['evidence_status'] == 'insufficient'
+    assert r['sla_breach_probability_ci95'][1] > 0
+
+
+def test_paired_comparison_and_horizon_metadata():
+    c = config(n=100)
+    c.simulation.simulated_years_per_trial = 2
+    r = client.post('/api/compare', json=c.model_dump()).json()
+    assert len(r['paired_comparisons']) == 3
+    for pair in r['paired_comparisons']:
+        results = {s['redundancy']: s for s in r['results']}
+        delta = (results[pair['baseline']]['expected_annual_downtime_minutes'] -
+                 results[pair['alternative']]['expected_annual_downtime_minutes'])
+        assert pair['downtime_reduction_minutes'] == pytest.approx(delta)
+        assert pair['ci95'][0] <= delta <= pair['ci95'][1]
+    for result in r['results']:
+        assert result['worst_trial']['horizon_hours'] == 17520
+        assert result['annual_sla_budget_minutes'] == pytest.approx(94.608)
+
+
+def test_injection_duration_energy_duplicates_and_whitespace():
+    r = client.post('/api/inject-failure', json={'config': {},
+        'failed_components': ['UPS-A01', 'UPS-A02', 'UPS-A02'], 'duration_hours': 2}).json()
+    assert r['downtime_minutes'] == 120 and r['unserved_energy_kwh'] == 5000
+    assert len(r['failed_components']) == 2
+    assert client.post('/api/topology', json={'facility_name': '   '}).status_code == 422
+
+
+@pytest.mark.parametrize('power,cooling', [('2N','N'), ('N','2N'), ('N+1','2N')])
+def test_mixed_architectures_have_correct_independent_capacity(power, cooling):
+    c = config(power)
+    c.cooling.redundancy = cooling
+    state = capacity_state(c, topology(c), {'UPS-A01'})
+    assert state['service_maintained'] == (power != 'N')
+
+
+def test_api_concurrency_limit_releases_slots():
+    from backend.app import slots
+    slots.acquire(); slots.acquire()
+    try:
+        assert client.post('/api/simulate', json=config(n=100).model_dump()).status_code == 429
+        assert client.get('/api/health').status_code == 200
+    finally:
+        slots.release(); slots.release()
+    assert client.post('/api/simulate', json=config(n=100).model_dump()).status_code == 200
