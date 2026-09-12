@@ -54,6 +54,7 @@ class Simulation(StrictModel):
     common_cause_events_per_year: float = Field(1, ge=0, le=10)
     common_cause_duration_hours: float = Field(4, gt=0, le=168)
     common_cause_scope: Literal['bank', 'site'] = 'bank'
+    common_cause_target: Literal['power', 'application'] = 'power'
     diagnostics: bool = False
     generator_rate_basis: Literal['published', 'count_exposure'] = 'published'
 
@@ -77,6 +78,8 @@ class Facility(StrictModel):
             raise ValueError(f"Experiment exceeds 45M weighted unit-trials. Use at most {estimate['max_trials']} trials, or reduce years/stress/components.")
         if self.simulation.failure_mode == 'single' and (self.simulation.dependent_failures or self.maintenance.enabled):
             raise ValueError('Maintenance/dependent failures require overlapping mode; single-failure suppression would invalidate them.')
+        if self.simulation.dependent_failures and self.simulation.common_cause_target == 'application' and not self.it.enabled:
+            raise ValueError('Shared application failures require the IT service model to be enabled.')
         if self.maintenance.enabled:
             # Maintenance must refer to a component existing in every comparison variant.
             base = self.model_copy(deep=True)
