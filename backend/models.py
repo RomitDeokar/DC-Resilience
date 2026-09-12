@@ -141,8 +141,10 @@ class CapacityTracker:
         self.config = config
         self.failed = set()
         self.units = {c['id']: c for g in groups for c in g['components']}
-        self.banks = {g['kind']: {b: sum(c['capacity_kw'] for c in g['components']
-                                      if c['bank'] == b) for b in ['A', 'B']} for g in groups}
+        self.healthy = {g['kind']: {b: sum(c['bank'] == b for c in g['components'])
+                                        for b in ['A', 'B']} for g in groups}
+        self.banks = {g['kind']: {b: self.healthy[g['kind']][b] * g['capacity_kw_each']
+                                      for b in ['A', 'B']} for g in groups}
         self.power_kinds = ['UPS_MODULE', 'PDU', 'ATS']
         if config.simulation.operating_mode == 'islanded':
             self.power_kinds.append('GENERATOR')
@@ -151,7 +153,10 @@ class CapacityTracker:
         if failed == (cid in self.failed):
             return
         c = self.units[cid]
-        self.banks[c['kind']][c['bank']] += (-1 if failed else 1) * c['capacity_kw']
+        # Integer health counts prevent fractional server capacity from drifting
+        # below zero after repeated hardware/software fail-repair cycles.
+        self.healthy[c['kind']][c['bank']] += -1 if failed else 1
+        self.banks[c['kind']][c['bank']] = self.healthy[c['kind']][c['bank']] * c['capacity_kw']
         if failed:
             self.failed.add(cid)
         else:
