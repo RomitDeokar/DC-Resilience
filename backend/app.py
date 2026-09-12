@@ -7,20 +7,24 @@ import uuid
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from .models import Facility, Injection, topology, capacity_state
-from .engine import simulate, RATES, MODEL_NOTES, paired_comparison
+from .models import Facility, Injection, topology, capacity_state, work_estimate
+from .engine import simulate, RATES, MODEL_NOTES, paired_comparison, diagnostics, DATASET_VERSION, ENGINE_VERSION
 
-app = FastAPI(title='DC-Resilience API', version='1.1.0', description='Reproducible Monte Carlo data centre redundancy experiments. No paid APIs.')
+app = FastAPI(title='DC-Resilience API', version=ENGINE_VERSION, description='Reproducible Monte Carlo data centre redundancy experiments. No paid APIs.')
 # Bound concurrent CPU jobs while leaving health/topology/failure injection responsive.
 slots = threading.BoundedSemaphore(2)
 
 @app.get('/api/health')
 def health():
-    return {'status': 'ok', 'engine': 'NumPy continuous-time Monte Carlo', 'version': '1.1.0'}
+    return {'status': 'ok', 'engine': 'NumPy continuous-time Monte Carlo', 'version': ENGINE_VERSION}
 
 @app.get('/api/failure-rates')
 def rates():
-    return {'rates': RATES, 'notes': MODEL_NOTES, 'dataset_version': '2026-09-10-mixed-v1'}
+    return {'rates': RATES, 'notes': MODEL_NOTES, 'dataset_version': DATASET_VERSION}
+
+@app.post('/api/preflight')
+def preflight(config: Facility):
+    return work_estimate(config)
 
 @app.post('/api/topology')
 def get_topology(config: Facility):
@@ -41,20 +45,21 @@ def inject(body: Injection):
 
 def experiment(config: Facility, compare: bool):
     if not slots.acquire(blocking=False):
-        raise HTTPException(429, 'The simulation engine is busy. Please retry in a moment.')
+        raise HTTPException(429, 'Two simulation jobs are already running. Your request was not started; retry after one finishes.', headers={'Retry-After': '5'})
     try:
         start = time.perf_counter()
         results = []
         for redundancy in ['N', 'N+1', '2N'] if compare else [None]:
             variant = config.model_copy(deep=True)
             if redundancy:
-                variant.power.redundancy = variant.cooling.redundancy = redundancy
+                variant.power.redundancy = variant.cooling.redundancy = variant.it.redundancy = redundancy
             results.append(simulate(variant))
-        return {'run_id': str(uuid.uuid4()), 'created_at': datetime.now(timezone.utc).isoformat(),
+        analysis = diagnostics(config) if config.simulation.diagnostics else None
+        return {'diagnostics': analysis, 'work_estimate': work_estimate(config), 'run_id': str(uuid.uuid4()), 'created_at': datetime.now(timezone.utc).isoformat(),
                 'kind': 'comparison' if compare else 'simulation', 'config': config.model_dump(),
                 'duration_seconds': round(time.perf_counter()-start, 3), 'results': results,
-                'dataset_version': '2026-09-10-mixed-v1', 'failure_rates': RATES,
-                'model_notes': MODEL_NOTES, 'engine_version': '1.1.0',
+                'dataset_version': DATASET_VERSION, 'failure_rates': RATES,
+                'model_notes': MODEL_NOTES, 'engine_version': ENGINE_VERSION,
                 'paired_comparisons': paired_comparison(results) if compare else []}
     finally:
         slots.release()

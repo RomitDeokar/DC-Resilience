@@ -9,17 +9,23 @@ from .models import Facility, TIERS, topology, capacity_state, CapacityTracker
 
 RATES = json.loads((Path(__file__).resolve().parent.parent / 'data/failure_rates.json').read_text())
 RATE_MAP = {r['component']: r for r in RATES}
+DATASET_VERSION = '2026-09-12-audited-assumptions-v2'
+ENGINE_VERSION = '2.0.0'
 MODEL_NOTES = [
-    'Mixed source dataset: 3 IEEE-493-citing secondary-source records; 2 explicitly illustrative records. Not publication-ready evidence.',
-    'Independent exponential operating lifetimes; constant repairs at MTTR; perfect repair; all components healthy at t=0.',
-    'Islanded operation continuously requires generator capacity. Utility mode assumes a perfectly available grid and ignores generator outages.',
-    '2N has independent A/B power trains and A/B cooling trains, without cross-ties. N+1 pools one spare per component group.',
-    'No common-cause/correlated failures, failure-to-start, fuel exhaustion, battery discharge, maintenance, switching delay, or thermal transients.',
-    'Tier-associated percentages are historical illustrative SLA benchmarks, not Uptime Institute Tier certification or guarantees.',
-    'Cost index is equal-weight installed component count relative to N; not a financial quotation.',
-    'Sample-mean 95% normal intervals are approximate; fewer than 30 outage trials triggers an evidence warning. With zero outages a conservative availability bound is derived from exact trial-outage risk.',
-    'SLA breach probability is measured over the full trial horizon, not separately for each calendar year. All year-labelled downtime is annualized.',
-    'Trial replay selects the highest-downtime trial (first tie), not a representative or typical year.'
+    'Mixed dataset: 3 IEEE-493-citing secondary-source records and 7 explicitly illustrative PDU/CRAC/IT records. Not publication-ready field evidence.',
+    'Source audit: Wiboonrat (2020) Table 2 has no PDU or CRAC rates. Generator row prints 0.58/year, but 115/266 gives 0.432330827/year. Neither interpretation is independently verified.',
+    'Independent exponential operating lifetimes, constant MTTR, perfect repair, all components healthy at t=0; exact event integration in fixed 256-trial batches bounds memory.',
+    'Islanded mode continuously requires generators. Utility mode assumes an ideal grid and ignores generators. Failure-to-start is NOT an operating hazard: per-demand start/retry, grid outages, battery discharge and fuel exhaustion remain future work.',
+    '2N has complete independent A/B power, cooling and IT service trains without cross-ties. Perfect workload failover and matching service placement within each IT train are assumed.',
+    'IT models representative server nodes (hardware plus co-located OS/hypervisor), network, storage and application replicas. IT capacities are workload-equivalent kW, NOT individual server electrical draw. No disk durability, quorum, VM placement, packet routing, human-error or cybersecurity model.',
+    'Optional common cause: Poisson external surge opportunities thinned by a user probability; each damages all UPS/generator units in bank A or across the site for a configured duration. This adds hazards, not a fixed-marginal correlation coefficient. Parameters are assumptions; arXiv:2402.18187 motivates the concept, not the chosen rates.',
+    'Optional maintenance: one scheduled window per full trial. A forced companion fault, if enabled, is a conditional stress test, NOT an empirical annual failure forecast. Maintenance-only tolerance and maintenance-plus-fault tolerance are different; neither certifies Tier III/IV.',
+    'No switching delays, thermal inertia or physical power-to-rack mappings. Overlapping causes on the same unit are reference-counted until ALL causes clear.',
+    'Historical Tier-associated percentages are illustrative SLA benchmarks, not Uptime Institute Tier certification criteria.',
+    'INR budgets are editable educational planning assumptions, NOT researched market prices or quotes. Exclude installation, tax, land, staffing, fuel, software licensing and OPEX; representative IT count is not a procurement BOM.',
+    '95% normal mean intervals are approximate; fewer than 30 outage trials warns of sparse evidence. Zero-outage intervals use a conservative exact trial-risk bound, never certainty. These intervals exclude input/model uncertainty.',
+    'Year-labelled downtime is annualized; SLA breach probability is over the full trial horizon. Worst trial replay is selected, not representative.',
+    'Optional diagnostics use at most 1000 paired trials, independent mode, no maintenance: actual one-factor +/-50% rate reruns and a separate dependency comparison. Sparse paired intervals and rankings are exploratory, not guaranteed.'
 ]
 
 
@@ -50,6 +56,8 @@ def evaluate_events(config: Facility, groups: list[dict], events: list[tuple], h
     minimum = surviving = tracker.capacities()[2]
     overlap = False
     samples = []
+    active_causes = Counter()
+    durations = event_durations(events) if capture else {}
     for time, action, cid, kind in sorted(events):
         t = min(time, hours)
         dt = max(0.0, t - last)
@@ -60,13 +68,14 @@ def evaluate_events(config: Facility, groups: list[dict], events: list[tuple], h
         last = t
         if time >= hours:
             break
-        tracker.update(cid, action == 1)
+        active_causes[cid] += 1 if action == 1 else -1
+        tracker.update(cid, active_causes[cid] > 0)
         overlap = overlap or len(tracker.failed) > 1
         surviving = tracker.capacities()[2]
         minimum = min(minimum, surviving)
         if capture and action == 1:
             samples.append({'component': cid, 'kind': kind, 'time_hours': time,
-                            'duration_hours': RATE_MAP[kind]['mttr_hours'],
+                            'duration_hours': durations.get((time, cid, kind), 0),
                             'active_failures': len(tracker.failed),
                             'surviving_capacity_kw': surviving,
                             'service_maintained': surviving >= config.it_load_kw})
@@ -82,66 +91,144 @@ def evaluate_events(config: Facility, groups: list[dict], events: list[tuple], h
 def trace_trial(config, groups, events, hours):
     """Exact failure/repair states for interactive replay, without rounded times."""
     tracker = CapacityTracker(config, groups)
+    active_causes = Counter()
     def point(time, action, cid):
         power, cooling, surviving = tracker.capacities()
         return {'time_hours': time, 'action': action, 'component': cid,
                 'surviving_capacity_kw': surviving, 'served_it_kw': min(config.it_load_kw, surviving),
-                'power_capacity_kw': power, 'cooling_capacity_kw': cooling,
+                'power_capacity_kw': power, 'cooling_capacity_kw': cooling, 'it_capacity_kw': tracker.it_capacity(),
                 'failed_components': sorted(tracker.failed),
                 'service_maintained': surviving >= config.it_load_kw}
     trace = [point(0.0, 'start', '')]
-    for time, action, cid, _ in sorted(events):
+    for time, action, cid, kind in sorted(events):
         if time >= hours:
             break
-        tracker.update(cid, action == 1)
-        trace.append(point(time, 'failure' if action == 1 else 'repair', cid))
+        active_causes[cid] += 1 if action == 1 else -1
+        tracker.update(cid, active_causes[cid] > 0)
+        trace.append({**point(time, 'failure' if action == 1 else 'repair', cid), 'cause': kind})
     trace.append(point(hours, 'end', ''))
     return trace
 
 
-def simulate(config: Facility) -> dict:
+def event_durations(events):
+    """Match cause-specific start/end events for honest sample durations."""
+    starts, durations = {}, {}
+    for t, action, cid, kind in sorted(events):
+        key = (cid, kind)
+        if action:
+            starts.setdefault(key, []).append(t)
+        elif starts.get(key):
+            start = starts[key].pop(0)
+            durations[(start, cid, kind)] = t-start
+    return durations
+
+
+def rate_value(config, kind, factors):
+    value = RATE_MAP[kind]['failure_rate_per_year']
+    if kind == 'GENERATOR' and config.simulation.generator_rate_basis == 'count_exposure':
+        value = 115 / 266
+    return value * factors.get(kind, 1)
+
+
+def event_batches(config, groups, rate_factors=None):
+    """Stable source/bank/unit/batch streams; prefix trials reproducible as n grows."""
+    sim, factors = config.simulation, rate_factors or {}
+    hours = sim.simulated_years_per_trial * 8760
+    for offset in range(0, sim.num_trials, 256):
+        # Always draw a full batch, including at the final partial batch.
+        batch = [[] for _ in range(256)]
+        for group in groups:
+            kinds = [group['kind']] + (['OS'] if group['kind'] == 'SERVER' else [])
+            for kind in kinds:
+                if sim.operating_mode == 'utility' and kind == 'GENERATOR':
+                    continue
+                rate = RATE_MAP[kind]
+                annual = rate_value(config, kind, factors) * sim.stress_multiplier
+                if annual <= 0:
+                    continue
+                for c in group['components']:
+                    bank = 0 if c['bank'] == 'A' else 1
+                    unit = int(c['id'].split('-')[1][1:])
+                    rng = np.random.default_rng(np.random.SeedSequence([sim.seed, list(RATE_MAP).index(kind), bank, unit, offset]))
+                    times = rng.exponential(8760 / annual, 256)
+                    active = np.flatnonzero(times < hours)
+                    while active.size:
+                        for trial in active:
+                            t = float(times[trial])
+                            batch[trial].extend([(t, 1, c['id'], kind), (t + rate['mttr_hours'], 0, c['id'], kind)])
+                        times[active] += rate['mttr_hours'] + rng.exponential(8760 / annual, active.size)
+                        active = active[times[active] < hours]
+        for j, events in enumerate(batch[:min(256, sim.num_trials-offset)]):
+            rng = np.random.default_rng(np.random.SeedSequence([sim.seed, 900, offset+j]))
+            if sim.dependent_failures:
+                rate = sim.common_cause_events_per_year * sim.common_cause_probability
+                affected = [c for g in groups if g['kind'] in ['UPS_MODULE', 'GENERATOR']
+                            for c in g['components'] if sim.common_cause_scope == 'site' or c['bank'] == 'A']
+                t = float(rng.exponential(8760/rate)) if rate else hours
+                while t < hours:
+                    for c in affected:
+                        events.extend([(t, 1, c['id'], 'COMMON_CAUSE'),
+                                       (t+sim.common_cause_duration_hours, 0, c['id'], 'COMMON_CAUSE')])
+                    t += float(rng.exponential(8760/rate))
+            m = config.maintenance
+            if m.enabled:
+                events.extend([(m.start_hour, 1, m.component_id, 'MAINTENANCE'),
+                               (m.start_hour+m.duration_hours, 0, m.component_id, 'MAINTENANCE')])
+                if m.inject_failure:
+                    peers = [c for g in groups for c in g['components']
+                             if c['id'].split('-')[0] == m.component_id.split('-')[0] and c['id'] != m.component_id]
+                    if peers:
+                        c = peers[int(rng.integers(len(peers)))]
+                        t = float(rng.uniform(m.start_hour, m.start_hour+m.duration_hours))
+                        events.extend([(t, 1, c['id'], 'FORCED_FAILURE'),
+                                       (t+RATE_MAP[c['kind']]['mttr_hours'], 0, c['id'], 'FORCED_FAILURE')])
+            yield offset+j, single_failure_events(events) if sim.failure_mode == 'single' else events
+
+
+def budget_estimate(config, groups):
+    b = config.budget
+    per_kw = {'UPS_MODULE': b.ups_inr_per_kw, 'GENERATOR': b.generator_inr_per_kw,
+              'PDU': b.pdu_inr_per_kw, 'ATS': b.ats_inr_per_kw, 'CRAC': b.crac_inr_per_kw}
+    per_unit = {'SERVER': b.server_node_inr, 'NETWORK': b.network_replica_inr,
+                'STORAGE': b.storage_replica_inr, 'APPLICATION': 0}
+    rows = [{'kind': g['kind'], 'units': len(g['components']),
+             'unit_inr': per_kw[g['kind']] * g['capacity_kw_each'] if g['kind'] in per_kw else per_unit[g['kind']]}
+            for g in groups]
+    for row in rows:
+        row['subtotal_inr'] = row['units'] * row['unit_inr']
+    return {'total_inr': sum(r['subtotal_inr'] for r in rows), 'breakdown': rows,
+            'basis': 'Editable planning assumptions; not vendor quotes. Tax, installation, OPEX and software licensing excluded.'}
+
+
+def simulate(config: Facility, rate_factors=None) -> dict:
     groups = topology(config)
     sim = config.simulation
     n = sim.num_trials
     hours = sim.simulated_years_per_trial * 8760
-    events: list[list[tuple]] = [[] for _ in range(n)]
     failures = Counter()
-    # Each stable component ID gets its own stream, shared across comparisons for variance reduction.
     components = [c for group in groups for c in group['components']]
-    for group_index, group in enumerate(groups):
-        if sim.operating_mode == 'utility' and group['kind'] == 'GENERATOR':
-            continue
-        rate = RATE_MAP[group['kind']]
-        for index, c in enumerate(group['components']):
-            # A streams are stable as topology changes; B has a distinct namespace.
-            bank_index = 0 if c['bank'] == 'A' else 1
-            unit_index = int(c['id'].split('-')[1][1:])
-            rng = np.random.default_rng(np.random.SeedSequence([sim.seed, group_index, bank_index, unit_index]))
-            scale = 8760 / (rate['failure_rate_per_year'] * sim.stress_multiplier)
-            times = rng.exponential(scale, n)
-            active = np.flatnonzero(times < hours)
-            while active.size:
-                for trial in active:
-                    t = float(times[trial])
-                    events[trial].append((t, 1, c['id'], c['kind']))
-                    events[trial].append((t + rate['mttr_hours'], 0, c['id'], c['kind']))
-                times[active] += rate['mttr_hours'] + rng.exponential(scale, active.size)
-                active = active[times[active] < hours]
-    downtime = np.zeros(n)
-    unserved = np.zeros(n)
+    downtime, unserved, maintenance_down = np.zeros(n), np.zeros(n), np.zeros(n)
     minima = np.full(n, config.it_load_kw)
-    overlaps = 0
+    overlaps, worst_index, worst_events, worst_down = 0, 0, [], -1
+    scenario_counts = Counter()
     sample_events = []
-    for i, trial_events in enumerate(events):
-        if sim.failure_mode == 'single':
-            trial_events = single_failure_events(trial_events)
-            events[i] = trial_events
+    for i, trial_events in event_batches(config, groups, rate_factors):
         for _, action, _, kind in trial_events:
             if action == 1:
-                failures[kind] += 1
+                if kind in RATE_MAP:
+                    failures[kind] += 1
+                else:
+                    scenario_counts[kind] += 1
         down, energy, minimum, overlap, samples = evaluate_events(config, groups, trial_events, hours, len(sample_events) < 60)
         downtime[i], unserved[i], minima[i] = down, energy, minimum
         overlaps += int(overlap)
+        if down > worst_down:
+            worst_index, worst_events, worst_down = i, trial_events, down
+        if config.maintenance.enabled:
+            m = config.maintenance
+            before = evaluate_events(config, groups, trial_events, m.start_hour)[0]
+            through = evaluate_events(config, groups, trial_events, m.start_hour+m.duration_hours)[0]
+            maintenance_down[i] = max(0, through-before)
         sample_events.extend([{**s, 'trial_id': i+1} for s in samples][:max(0, 60-len(sample_events))])
     annual_minutes = downtime * 60 / sim.simulated_years_per_trial
     availability = 100 * (1 - downtime / hours)
@@ -160,20 +247,42 @@ def simulate(config: Facility) -> dict:
     evidence = ('insufficient' if outage_trials < 30 else
                 'above' if mean_ci[0] >= target else
                 'below' if mean_ci[1] < target else 'inconclusive')
-    worst = int(np.argmax(downtime))
+    worst = worst_index
     cumulative = np.cumsum(availability)
-    convergence = [{'trials': int(k), 'availability': float(cumulative[k-1]/k)}
-                   for k in np.unique(np.linspace(max(1, n//50), n, 50).astype(int))]
+    cumulative_square = np.cumsum((availability-100)**2)
+    cumulative_loss = np.cumsum(availability-100)
+    convergence = []
+    for k in np.unique(np.linspace(max(2, n//50), n, 50).astype(int)):
+        avg = float(cumulative[k-1]/k)
+        variance = max(0, (cumulative_square[k-1]-cumulative_loss[k-1]**2/k)/(k-1))
+        half = 1.96*math.sqrt(variance/k)
+        zero = not np.any(downtime[:k])
+        low = 100*(1-exact_probability_interval(0, int(k))[1]) if zero else max(0, avg-half)
+        convergence.append({'trials': int(k), 'availability': avg, 'ci_low': low,
+                            'ci_high': min(100, avg+half), 'outage_trials': int(np.count_nonzero(downtime[:k]))})
     bins = [0, 1, 15, 60, 240, 1440, float('inf')]
     histogram = [{'range': 'No outage', 'trials': int(np.sum(annual_minutes == 0))}]
     labels = ['< 1 min', '1–15 min', '15–60 min', '1–4 hrs', '4–24 hrs', '> 24 hrs']
     for j, label in enumerate(labels):
         histogram.append({'range': label, 'trials': int(np.sum((annual_minutes > bins[j]) & (annual_minutes <= bins[j+1])))})
     base = config.model_copy(deep=True)
-    base.power.redundancy = base.cooling.redundancy = 'N'
+    base.power.redundancy = base.cooling.redundancy = base.it.redundancy = 'N'
     base_count = sum(len(g['components']) for g in topology(base))
     topology_name = config.power.redundancy if config.power.redundancy == config.cooling.redundancy else f'{config.power.redundancy} / {config.cooling.redundancy}'
+    if config.it.enabled and config.it.redundancy != config.power.redundancy:
+        topology_name += f' / IT {config.it.redundancy}'
+    maintenance = None
+    if config.maintenance.enabled:
+        m = config.maintenance
+        maintenance = {'component': m.component_id, 'window_hours': m.duration_hours,
+                       'maintenance_only_maintained': capacity_state(config, groups, {m.component_id})['service_maintained'],
+                       'forced_fault': m.inject_failure, 'window_outage_trials': int(np.count_nonzero(maintenance_down)),
+                       'mean_window_downtime_minutes': float(np.mean(maintenance_down)*60),
+                       'window_outage_probability_ci95': exact_probability_interval(int(np.count_nonzero(maintenance_down)), n)}
     return {
+        'scenario_events': dict(scenario_counts), 'maintenance': maintenance,
+        'budget': budget_estimate(config, groups),
+        'effective_rates': {kind: rate_value(config, kind, rate_factors or {}) for kind in RATE_MAP},
         'redundancy': topology_name, 'trials_run': n, 'seed': sim.seed,
         'simulated_years': n * sim.simulated_years_per_trial,
         'availability_percent': mean, 'availability_ci95': mean_ci,
@@ -182,7 +291,7 @@ def simulate(config: Facility) -> dict:
         'annual_sla_budget_minutes': (1-target/100)*525600,
         'p99_annual_downtime_minutes': float(np.quantile(annual_minutes, .99)),
         'worst_trial': {'trial_id': worst+1, 'downtime_minutes': float(downtime[worst]*60),
-                        'horizon_hours': hours, 'timeline': trace_trial(config, groups, events[worst], hours)},
+                        'horizon_hours': hours, 'timeline': trace_trial(config, groups, worst_events, hours)},
         'expected_annual_downtime_minutes': float(np.mean(annual_minutes)),
         'p95_annual_downtime_minutes': float(np.quantile(annual_minutes, .95)),
         'sla_target_percent': target, 'sla_breaches': breach_count,
@@ -218,3 +327,43 @@ def paired_comparison(results: list[dict]) -> list[dict]:
                             'nonzero_pairs': int(np.count_nonzero(delta)),
                             'evidence_limited': int(np.count_nonzero(delta)) < 30})
     return comparisons
+
+
+def paired_delta(a, b):
+    delta = np.array([t['annual_downtime_minutes'] for t in b['trial_results']]) - np.array(
+        [t['annual_downtime_minutes'] for t in a['trial_results']])
+    mean = float(delta.mean())
+    half = 1.96 * float(delta.std(ddof=1)) / math.sqrt(len(delta))
+    return {'delta_minutes': mean, 'ci95': [mean-half, mean+half],
+            'nonzero_pairs': int(np.count_nonzero(delta)), 'evidence_limited': int(np.count_nonzero(delta)) < 30}
+
+
+def diagnostics(config):
+    """Real one-factor reruns, never failure-count proxies. Small fixed paired study."""
+    c = config.model_copy(deep=True)
+    c.simulation.num_trials = min(1000, c.simulation.num_trials)
+    c.simulation.diagnostics = c.simulation.dependent_failures = c.maintenance.enabled = False
+    c.simulation.failure_mode = 'overlapping'
+    baseline = simulate(c)
+    rows = []
+    active = {g['kind'] for g in topology(c)} | ({'OS'} if c.it.enabled else set())
+    for kind in RATE_MAP:
+        if kind not in active or (kind == 'GENERATOR' and c.simulation.operating_mode == 'utility'):
+            continue
+        low, high = simulate(c, {kind: .5}), simulate(c, {kind: 1.5})
+        rows.append({'kind': kind, 'label': RATE_MAP[kind]['label'],
+                     'low': paired_delta(baseline, low), 'high': paired_delta(baseline, high)})
+    rows.sort(key=lambda r: max(abs(r['low']['delta_minutes']), abs(r['high']['delta_minutes'])), reverse=True)
+    c.simulation.dependent_failures = True
+    dependent = simulate(c)
+    generator_audit = None
+    if c.simulation.operating_mode == 'islanded':
+        c.simulation.dependent_failures = False
+        c.simulation.generator_rate_basis = 'count_exposure' if config.simulation.generator_rate_basis == 'published' else 'published'
+        alternative = simulate(c)
+        generator_audit = {'alternative_basis': c.simulation.generator_rate_basis, **paired_delta(baseline, alternative)}
+    return {'trials': c.simulation.num_trials, 'sensitivity': rows,
+            'baseline_downtime_minutes': baseline['expected_annual_downtime_minutes'],
+            'dependent_downtime_minutes': dependent['expected_annual_downtime_minutes'],
+            'dependency_effect': paired_delta(baseline, dependent), 'generator_audit': generator_audit,
+            'basis': 'Paired +/-50% operating-rate reruns; same selected architecture, stress and seed; no maintenance. Positive delta means increased downtime.'}
