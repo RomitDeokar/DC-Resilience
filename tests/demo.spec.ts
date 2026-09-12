@@ -34,7 +34,7 @@ test('comparison exports JSON, both CSVs and a printable PDF; history restores',
   await page.goto(url)
   await page.locator('#preset').selectOption('quick')
   await page.getByRole('button',{name:'Architecture comparison',exact:true}).click()
-  const responsePromise=page.waitForResponse(r=>r.url().endsWith('/api/compare'))
+  const responsePromise=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/compare')
   await page.getByRole('button',{name:'Compare architectures',exact:true}).click()
   const response=await responsePromise
   expect(response.ok()).toBeTruthy()
@@ -53,6 +53,7 @@ test('comparison exports JSON, both CSVs and a printable PDF; history restores',
     else {
       expect(content).toContain('engine_version')
       expect(content).toContain(run.run_id)
+      expect(content).toContain(run.input_fingerprint)
       expect(content.split('\r\n')).toHaveLength(name==='trials.csv'?3001:4)
     }
   }
@@ -86,7 +87,7 @@ test('oversized jobs are blocked before submission and busy responses recover', 
   await page.getByRole('button',{name:'Reduce to a safe trial count',exact:true}).click()
   await expect(page.getByRole('button',{name:'Run simulation',exact:true})).toBeEnabled()
   await page.locator('#preset').selectOption('quick')
-  await page.route('**/api/simulate',r=>r.fulfill({status:429,contentType:'application/json',headers:{'Retry-After':'5'},body:JSON.stringify({detail:'Two simulation jobs are already running. Retry after one finishes.'})}))
+  await page.route('**/api/simulate?*',r=>r.fulfill({status:429,contentType:'application/json',headers:{'Retry-After':'5'},body:JSON.stringify({detail:'Two simulation jobs are already running. Retry after one finishes.'})}))
   await page.getByRole('button',{name:'Run simulation',exact:true}).click()
   await expect(page.locator('.error-banner')).toContainText('Two simulation jobs')
   await expect(page.getByRole('button',{name:'Run simulation',exact:true})).toBeEnabled()
@@ -105,15 +106,17 @@ test('server and OS lab scenarios, dependency and maintenance diagnostics render
   await page.getByRole('button',{name:'Restore all',exact:true}).click()
   await expect(impact.locator('strong')).toHaveText('Protected')
   await page.getByRole('button',{name:'Simulation workspace',exact:true}).click()
-  for(const preset of ['dependent','maintenance','diagnostics']) {
+  for(const preset of ['dependent','software','maintenance-only','maintenance','diagnostics']) {
     await page.locator('#preset').selectOption(preset)
     // Test the real 1,000-trial demo presets, including diagnostics.
-    const responsePromise=page.waitForResponse(r=>r.url().endsWith('/api/simulate'))
+    const responsePromise=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/simulate')
     await page.getByRole('button',{name:'Run simulation',exact:true}).click()
     const response=await responsePromise
     expect(response.ok()).toBeTruthy()
     await expect(page.getByRole('heading',{name:'Simulation results',exact:true})).toBeVisible()
     if(preset==='dependent') await expect(page.getByText(/distinct surge incidents/)).toBeVisible()
+    if(preset==='software') await expect(page.getByText(/distinct deployment incidents/)).toBeVisible()
+    if(preset==='maintenance-only') await expect(page.getByText(/natural failures may overlap/)).toBeVisible()
     if(preset==='maintenance') await expect(page.getByText(/Forced companion fault applied in/)).toBeVisible()
     if(preset==='diagnostics') await expect(page.getByRole('heading',{name:'Sensitivity / tornado chart',exact:true})).toBeVisible()
   }
@@ -122,4 +125,28 @@ test('server and OS lab scenarios, dependency and maintenance diagnostics render
   await page.getByRole('button',{name:'Next replay event',exact:true}).click()
   await expect(page.locator('.replay-event')).toContainText('cause started')
   expect(errors).toEqual([])
+})
+
+
+test('completed-trial counters show real diagnostic work and clean up after completion', async ({page}) => {
+  await page.goto(url)
+  await page.locator('#preset').selectOption('diagnostics')
+  const counter=page.waitForResponse(r=>new URL(r.url()).pathname.startsWith('/api/progress/')&&r.status()===200)
+  await page.getByRole('button',{name:'Run simulation',exact:true}).click()
+  const state=await (await counter).json()
+  expect(state.total_trials).toBe(24000)
+  expect(state.completed_trials).toBeGreaterThan(0)
+  expect(state.completed_trials).toBeLessThanOrEqual(state.total_trials)
+  await expect(page.getByRole('progressbar',{name:'Completed trial evaluations'})).toBeVisible()
+  await expect(page.getByRole('heading',{name:'Simulation results',exact:true})).toBeVisible()
+  await expect(page.getByRole('progressbar',{name:'Completed trial evaluations'})).toHaveCount(0)
+})
+
+test('application diagnostics with disabled IT are blocked on client and server', async ({request}) => {
+  const c=structuredClone(DEFAULT_CONFIG)
+  c.it.enabled=false
+  c.simulation.common_cause_target='application'
+  c.simulation.diagnostics=true
+  expect(configError(c)).toContain('IT service model')
+  expect((await request.post(`${url}/api/preflight`,{data:c})).status()).toBe(422)
 })

@@ -10,7 +10,7 @@ from .models import Facility, TIERS, topology, capacity_state, CapacityTracker
 RATES = json.loads((Path(__file__).resolve().parent.parent / 'data/failure_rates.json').read_text())
 RATE_MAP = {r['component']: r for r in RATES}
 DATASET_VERSION = '2026-09-12-audited-assumptions-v2'
-ENGINE_VERSION = '2.1.0'
+ENGINE_VERSION = '2.3.0'
 MODEL_NOTES = [
     'Mixed dataset: 3 IEEE-493-citing secondary-source records and 7 explicitly illustrative PDU/CRAC/IT records. Not publication-ready field evidence.',
     'Source audit: Wiboonrat (2020) Table 2 has no PDU or CRAC rates. Generator row prints 0.58/year, but 115/266 gives 0.432330827/year. Neither interpretation is independently verified.',
@@ -18,7 +18,7 @@ MODEL_NOTES = [
     'Islanded mode continuously requires generators. Utility mode assumes an ideal grid and ignores generators. Failure-to-start is NOT an operating hazard: per-demand start/retry, grid outages, battery discharge and fuel exhaustion remain future work.',
     '2N has complete independent A/B power, cooling and IT service trains without cross-ties. Perfect workload failover and matching service placement within each IT train are assumed.',
     'IT models representative server nodes (hardware plus co-located OS/hypervisor), network, storage and application replicas. IT capacities are workload-equivalent kW, NOT individual server electrical draw. No disk durability, quorum, VM placement, packet routing, human-error or cybersecurity model.',
-    'Optional common cause: Poisson external surge opportunities thinned by a user probability; each damages all UPS/generator units in bank A or across the site for a configured duration. This adds hazards, not a fixed-marginal correlation coefficient. Parameters are assumptions; arXiv:2402.18187 motivates the concept, not the chosen rates.',
+    'Optional common cause: Poisson opportunities thinned by a user probability; target power (all UPS/generator units) or application (shared bad deployment on all application replicas), in bank A or across the site. One opportunity stream and configured recovery duration; not both targets at once. This adds hazards, not a fixed-marginal correlation coefficient. Parameters are assumptions; arXiv:2402.18187 motivates dependence, not these mechanisms or rates.',
     'Optional maintenance: one scheduled window per full trial. A forced companion fault, if enabled, is a conditional stress test, NOT an empirical annual failure forecast. Maintenance-only tolerance and maintenance-plus-fault tolerance are different; neither certifies Tier III/IV.',
     'No switching delays, thermal inertia or physical power-to-rack mappings. Overlapping causes on the same unit are reference-counted until ALL causes clear.',
     'Historical Tier-associated percentages are illustrative SLA benchmarks, not Uptime Institute Tier certification criteria.',
@@ -27,6 +27,7 @@ MODEL_NOTES = [
     'Year-labelled downtime is annualized; SLA breach probability is over the full trial horizon. Worst trial replay is selected, not representative.',
     'Scenario event counts count affected units; scenario incidents count distinct shared-event starts. A forced maintenance fault is skipped when no same-group peer exists, and skipped trials are reported.',
     'Random draws are coupled by component, trial and renewal ordinal for rate sensitivity reruns. Changing engine version can change seeded numerical results.',
+    'Progress counts completed trial evaluations, including all diagnostic reruns; it is not an estimate of remaining wall-clock time.',
     'Optional diagnostics use at most 1000 paired trials, independent mode, no maintenance: actual one-factor +/-50% rate reruns and a separate dependency comparison. Sparse paired intervals and rankings are exploratory, not guaranteed.'
 ]
 
@@ -167,7 +168,8 @@ def event_batches(config, groups, rate_factors=None):
             rng = np.random.default_rng(np.random.SeedSequence([sim.seed, 900, offset+j]))
             if sim.dependent_failures:
                 rate = sim.common_cause_events_per_year * sim.common_cause_probability
-                affected = [c for g in groups if g['kind'] in ['UPS_MODULE', 'GENERATOR']
+                kinds = {'APPLICATION'} if sim.common_cause_target == 'application' else {'UPS_MODULE', 'GENERATOR'}
+                affected = [c for g in groups if g['kind'] in kinds
                             for c in g['components'] if sim.common_cause_scope == 'site' or c['bank'] == 'A']
                 t = float(rng.exponential(8760/rate)) if rate else hours
                 while t < hours:
@@ -207,7 +209,7 @@ def budget_estimate(config, groups):
             'basis': 'Editable planning assumptions; not vendor quotes. Tax, installation, OPEX and software licensing excluded.'}
 
 
-def simulate(config: Facility, rate_factors=None) -> dict:
+def simulate(config: Facility, rate_factors=None, progress=None) -> dict:
     groups = topology(config)
     sim = config.simulation
     n = sim.num_trials
@@ -242,6 +244,8 @@ def simulate(config: Facility, rate_factors=None) -> dict:
             through = evaluate_events(config, groups, trial_events, m.start_hour+m.duration_hours)[0]
             maintenance_down[i] = max(0, through-before)
         sample_events.extend([{**s, 'trial_id': i+1} for s in samples][:max(0, 60-len(sample_events))])
+        if progress and ((i + 1) % 256 == 0 or i + 1 == n):
+            progress((i % 256) + 1)
     annual_minutes = downtime * 60 / sim.simulated_years_per_trial
     availability = 100 * (1 - downtime / hours)
     target = TIERS[config.tier_target]
@@ -304,6 +308,8 @@ def simulate(config: Facility, rate_factors=None) -> dict:
         'simulated_years': n * sim.simulated_years_per_trial,
         'availability_percent': mean, 'availability_ci95': mean_ci,
         'availability_ci_method': ci_method, 'evidence_status': evidence,
+        'annual_downtime_ci95': [(100-mean_ci[1])*5256, (100-mean_ci[0])*5256],
+        'availability_standard_error_pp': se,
         'sla_breach_probability_ci95': exact_probability_interval(breach_count, n),
         'annual_sla_budget_minutes': (1-target/100)*525600,
         'p99_annual_downtime_minutes': float(np.quantile(annual_minutes, .99)),
@@ -355,31 +361,41 @@ def paired_delta(a, b):
             'nonzero_pairs': int(np.count_nonzero(delta)), 'evidence_limited': int(np.count_nonzero(delta)) < 30}
 
 
-def diagnostics(config):
+def diagnostics(config, progress=None):
     """Real one-factor reruns, never failure-count proxies. Small fixed paired study."""
     c = config.model_copy(deep=True)
     c.simulation.num_trials = min(1000, c.simulation.num_trials)
     c.simulation.diagnostics = c.simulation.dependent_failures = c.maintenance.enabled = False
     c.simulation.failure_mode = 'overlapping'
-    baseline = simulate(c)
+    # A stored, inactive software scenario must not become a no-op dependency
+    # experiment when the user disables IT before requesting diagnostics.
+    if not c.it.enabled:
+        c.simulation.common_cause_target = 'power'
+    def run(label, factors=None):
+        callback = (lambda completed: progress(label, completed)) if progress else None
+        if progress:
+            progress(label, 0)
+        return simulate(c, factors, progress=callback)
+
+    baseline = run('Sensitivity baseline')
     rows = []
     active = {g['kind'] for g in topology(c)} | ({'OS'} if c.it.enabled else set())
     for kind in RATE_MAP:
         if kind not in active or (kind == 'GENERATOR' and c.simulation.operating_mode == 'utility'):
             continue
-        low, high = simulate(c, {kind: .5}), simulate(c, {kind: 1.5})
+        low, high = run(f'{kind}: rate -50%', {kind: .5}), run(f'{kind}: rate +50%', {kind: 1.5})
         rows.append({'kind': kind, 'label': RATE_MAP[kind]['label'],
                      'low': paired_delta(baseline, low), 'high': paired_delta(baseline, high)})
     rows.sort(key=lambda r: max(abs(r['low']['delta_minutes']), abs(r['high']['delta_minutes'])), reverse=True)
     c.simulation.dependent_failures = True
-    dependent = simulate(c)
+    dependent = run('Shared-hazard comparison')
     generator_audit = None
     if c.simulation.operating_mode == 'islanded':
         c.simulation.dependent_failures = False
         c.simulation.generator_rate_basis = 'count_exposure' if config.simulation.generator_rate_basis == 'published' else 'published'
-        alternative = simulate(c)
+        alternative = run('Generator source audit')
         generator_audit = {'alternative_basis': c.simulation.generator_rate_basis, **paired_delta(baseline, alternative)}
-    return {'trials': c.simulation.num_trials, 'sensitivity': rows,
+    return {'trials': c.simulation.num_trials, 'common_cause_target': c.simulation.common_cause_target, 'sensitivity': rows,
             'baseline_downtime_minutes': baseline['expected_annual_downtime_minutes'],
             'dependent_downtime_minutes': dependent['expected_annual_downtime_minutes'],
             'dependency_effect': paired_delta(baseline, dependent), 'generator_audit': generator_audit,
