@@ -1,6 +1,8 @@
 """Stateless FastAPI service, serving both the compiled React app and simulation API."""
 from datetime import datetime, timezone
 from pathlib import Path
+import hashlib
+import json
 import threading
 import time
 import uuid
@@ -55,7 +57,10 @@ def experiment(config: Facility, compare: bool):
                 variant.power.redundancy = variant.cooling.redundancy = variant.it.redundancy = redundancy
             results.append(simulate(variant))
         analysis = diagnostics(config) if config.simulation.diagnostics else None
-        return {'diagnostics': analysis, 'work_estimate': work_estimate(config), 'run_id': str(uuid.uuid4()), 'created_at': datetime.now(timezone.utc).isoformat(),
+        fingerprint = hashlib.sha256(json.dumps({'config': config.model_dump(), 'rates': RATES,
+            'engine_version': ENGINE_VERSION, 'dataset_version': DATASET_VERSION},
+            sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
+        return {'input_fingerprint': fingerprint, 'diagnostics': analysis, 'work_estimate': work_estimate(config), 'run_id': str(uuid.uuid4()), 'created_at': datetime.now(timezone.utc).isoformat(),
                 'kind': 'comparison' if compare else 'simulation', 'config': config.model_dump(),
                 'duration_seconds': round(time.perf_counter()-start, 3), 'results': results,
                 'dataset_version': DATASET_VERSION, 'failure_rates': RATES,
