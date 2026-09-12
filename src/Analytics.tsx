@@ -23,7 +23,7 @@ export function ResultsDashboard({run, onCompare}: {run: Run; onCompare: ()=>voi
   const domain = [Math.max(0,Math.floor((lower-.0005)*1000)/1000),100]
   const events = r.sample_events.filter(e=>eventFilter==='all'||!e.service_maintained)
   return <>
-    <div className="results-heading"><div><h3>Simulation results</h3><span className="badge success"><Check size={11}/>Completed</span></div><span className="subtle">{number(r.trials_run)} trials · {run.duration_seconds.toFixed(2)}s runtime</span></div>
+    <div className="results-heading"><div><h3>Simulation results</h3><span className="badge success"><Check size={11}/>Completed</span></div><span className="subtle">{number(r.trials_run)} trials · {run.duration_seconds.toFixed(2)}s runtime · engine {run.engine_version}</span></div>
     <Metrics result={r}/>
     <EvidencePanel result={r} years={run.config.simulation.simulated_years_per_trial}/>
     <ScenarioSummary run={run} result={r}/>
@@ -62,7 +62,7 @@ function EvidencePanel({result:r, years}: {result:Result; years:number}) {
   return <section className={`evidence-panel ${sparse?'limited':''}`} aria-label="Statistical evidence">
     <div className="evidence-heading"><span>{sparse?<TriangleAlert size={17}/>:<ShieldCheck size={17}/>}<strong>{sparse?'Limited outage evidence':status==='above'?'Mean interval above benchmark':status==='below'?'Mean interval below benchmark':'Benchmark evidence is inconclusive'}</strong></span><span className="small-tag">{number(r.outage_trials)} outage trials</span></div>
     <p>{sparse?'Fewer than 30 outage trials is a caution flag, not a formal adequacy test. More trials may be needed; zero observed outages never proves perfect reliability.':'The interval measures sampling uncertainty under this model, not uncertainty in failure-rate data or real-world Tier compliance.'}</p>
-    <div className="evidence-stats"><div><span>Annual SLA downtime budget</span><b>{number(r.annual_sla_budget_minutes??(1-r.sla_target_percent/100)*525600,3)} min</b></div><div><span>Any outage · exact 95% risk interval</span><b>{r.outage_probability_ci95.map(v=>number(v*100,3)).join('–')}%</b></div><div><span>SLA breach · exact 95% risk interval</span><b>{r.sla_breach_probability_ci95?.map(v=>number(v*100,3)).join('–')??'Rerun for interval'}{r.sla_breach_probability_ci95?'%':''}</b></div><div><span>Expected unserved energy / year</span><b>{number(r.expected_unserved_energy_kwh_per_year,2)} kWh</b></div></div>
+    <div className="evidence-stats">{r.annual_downtime_ci95&&<div><span>Mean annual downtime · 95% interval / bound</span><b>{r.annual_downtime_ci95.map(v=>number(v,3)).join("–")} min</b></div>}<div><span>Annual SLA downtime budget</span><b>{number(r.annual_sla_budget_minutes??(1-r.sla_target_percent/100)*525600,3)} min</b></div><div><span>Any outage · exact 95% risk interval</span><b>{r.outage_probability_ci95.map(v=>number(v*100,3)).join('–')}%</b></div><div><span>SLA breach · exact 95% risk interval</span><b>{r.sla_breach_probability_ci95?.map(v=>number(v*100,3)).join('–')??'Rerun for interval'}{r.sla_breach_probability_ci95?'%':''}</b></div><div><span>Expected unserved energy / year</span><b>{number(r.expected_unserved_energy_kwh_per_year,2)} kWh</b></div></div>
     <small>Risk probabilities refer to a complete {years}-year trial. SLA breaches use the full-horizon average, not a separate check of each year.</small>
   </section>
 }

@@ -43,3 +43,10 @@
 .diagnostic-panel{margin-top:18px}.diagnostic-panel>p,.diagnostic-panel>small{display:block;padding:0 18px 16px;color:#68788b;font-size:11px;line-height:1.8}.tornado-chart{height:440px;padding:0 12px}.diagnostic-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding:0 18px 18px}.diagnostic-metrics>div{background:#f5f8fb;border:1px solid #e2e8ef;border-radius:7px;padding:14px}.diagnostic-metrics span{display:block;color:#6a798a;font-size:11px}.diagnostic-metrics strong{display:block;font-size:20px;color:#2e4c67;margin:5px 0}.diagnostic-metrics small{font-size:10px;color:#657c8e}.report-json{white-space:pre-wrap;overflow-wrap:anywhere;font-size:9px;line-height:1.5;background:#f6f8fa;padding:14px}.scenario-bar small{font-size:10px;color:#63758b}
 @media(max-width:590px){.diagnostic-metrics{grid-template-columns:1fr}.tornado-chart{height:420px}.check-label input[type=checkbox]{width:20px;height:20px}.equipment-title span{overflow-wrap:anywhere}}
 @media print{.report-json{background:white;font-size:7pt}.design-report table{break-inside:auto}.design-report tr{break-inside:avoid}}
+
+/* Completed work is measured by the engine, never interpolated from elapsed time. */
+.measured-progress{width:min(100%,480px);margin:24px auto;text-align:left}
+.measured-progress>div{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:11px;color:#53667b}
+.measured-progress progress{display:block;width:100%;height:12px;margin:12px 0;accent-color:var(--orange)}
+.measured-progress small{font-size:10px;line-height:1.7;display:block;color:#65788d}
+.design-report .mono{overflow-wrap:anywhere}
