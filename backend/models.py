@@ -78,7 +78,7 @@ class Facility(StrictModel):
             raise ValueError(f"Experiment exceeds 45M weighted unit-trials. Use at most {estimate['max_trials']} trials, or reduce years/stress/components.")
         if self.simulation.failure_mode == 'single' and (self.simulation.dependent_failures or self.maintenance.enabled):
             raise ValueError('Maintenance/dependent failures require overlapping mode; single-failure suppression would invalidate them.')
-        if self.simulation.dependent_failures and self.simulation.common_cause_target == 'application' and not self.it.enabled:
+        if (self.simulation.dependent_failures or self.simulation.diagnostics) and self.simulation.common_cause_target == 'application' and not self.it.enabled:
             raise ValueError('Shared application failures require the IT service model to be enabled.')
         if self.maintenance.enabled:
             # Maintenance must refer to a component existing in every comparison variant.
@@ -92,7 +92,15 @@ class Facility(StrictModel):
 
         return self
 
-def work_estimate(config: Facility) -> dict:
+def diagnostic_pass_count(config: Facility) -> int:
+    if not config.simulation.diagnostics:
+        return 0
+    active_rates = 5 + (5 if config.it.enabled else 0) - (config.simulation.operating_mode == 'utility')
+    # Baseline + dependent study + two reruns per active rate + generator audit.
+    return 2 + 2 * active_rates + (config.simulation.operating_mode == 'islanded')
+
+
+def work_estimate(config: Facility, compare: bool = False) -> dict:
     capacities = [config.power.ups_capacity_kw_each, config.power.generator_capacity_kw_each,
                   config.power.pdu_capacity_kw_each, config.cooling.crac_capacity_kw_each, config.it_load_kw]
     components = sum(2 * math.ceil(config.it_load_kw / c) for c in capacities)
@@ -103,7 +111,11 @@ def work_estimate(config: Facility) -> dict:
     weight = streams * config.simulation.simulated_years_per_trial * config.simulation.stress_multiplier
     return {'comparison_components': components, 'unit_trials': weight * config.simulation.num_trials,
             'limit': 45000000, 'max_trials': min(20000, 45000000 // weight), 'concurrent_jobs': 2,
-            'diagnostic_trials': min(config.simulation.num_trials, 1000)}
+            'diagnostic_trials': min(config.simulation.num_trials, 1000),
+            'diagnostic_passes': diagnostic_pass_count(config),
+            'primary_passes': 3 if compare else 1,
+            'total_trial_evaluations': config.simulation.num_trials * (3 if compare else 1)
+                + min(config.simulation.num_trials, 1000) * diagnostic_pass_count(config)}
 
 
 class Injection(StrictModel):

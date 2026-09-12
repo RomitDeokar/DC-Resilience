@@ -321,7 +321,7 @@ def test_diagnostic_reruns_are_reproducible_and_do_not_mutate_config():
 def test_slots_release_after_engine_error(monkeypatch):
     import importlib
     module = importlib.import_module('backend.app')
-    def fail(_):
+    def fail(_, **kwargs):
         raise RuntimeError('test error')
     monkeypatch.setattr(module, 'simulate', fail)
     with pytest.raises(RuntimeError, match='test error'):
@@ -329,3 +329,76 @@ def test_slots_release_after_engine_error(monkeypatch):
     assert module.slots.acquire(blocking=False)
     assert module.slots.acquire(blocking=False)
     module.slots.release(); module.slots.release()
+
+
+def test_diagnostics_cannot_silently_compare_missing_applications():
+    response = client.post('/api/preflight', json={'it': {'enabled': False},
+        'simulation': {'diagnostics': True, 'common_cause_target': 'application'}})
+    assert response.status_code == 422
+    assert 'IT service model' in response.text
+
+
+def test_progress_counts_every_trial_without_changing_randomness():
+    c = config(n=300)
+    counts = []
+    result = simulate(c, progress=counts.append)
+    assert counts == [256, 44]
+    assert result == simulate(c)
+    assert result['annual_downtime_ci95'][0] <= result['expected_annual_downtime_minutes'] <= result['annual_downtime_ci95'][1]
+
+
+def test_diagnostic_progress_matches_preflight_plan():
+    from backend.engine import diagnostics
+    from backend.models import work_estimate
+    c = config('N', n=100)
+    c.simulation.diagnostics = True
+    counts = []
+    diagnostics(c, progress=lambda label, count: counts.append((label, count)))
+    assert len({label for label, _ in counts}) == 23
+    assert sum(count for _, count in counts) == 2300
+    assert work_estimate(c, True)['total_trial_evaluations'] == 2600
+
+
+def test_fingerprint_includes_experiment_kind_and_preserves_reproducibility():
+    c = config(n=100).model_dump()
+    a = client.post('/api/simulate', json=c).json()
+    b = client.post('/api/simulate', json=c).json()
+    comparison = client.post('/api/compare', json=c).json()
+    assert a['run_id'] != b['run_id']
+    assert a['input_fingerprint'] == b['input_fingerprint']
+    assert a['results'] == b['results']
+    assert a['input_fingerprint'] != comparison['input_fingerprint']
+    c['simulation']['seed'] += 1
+    assert a['input_fingerprint'] != client.post('/api/simulate', json=c).json()['input_fingerprint']
+
+
+def test_active_progress_is_isolated_cleaned_and_does_not_expose_inputs(monkeypatch):
+    import importlib
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from uuid import uuid4
+    module = importlib.import_module('backend.app')
+    entered, release = Event(), Event()
+    original = module.simulate
+    def paused(c, progress=None):
+        progress(0)
+        entered.set()
+        assert release.wait(10)
+        return original(c, progress=progress)
+    monkeypatch.setattr(module, 'simulate', paused)
+    handle = uuid4()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(module.experiment, config(n=100), False, handle)
+        try:
+            assert entered.wait(5)
+            status = client.get(f'/api/progress/{handle}').json()
+            assert status == {'completed_trials': 0, 'total_trials': 100, 'phase': 'Selected architecture'}
+            assert client.get(f'/api/progress/{uuid4()}').status_code == 404
+            duplicate = client.post(f'/api/simulate?job_id={handle}', json=config(n=100).model_dump())
+            assert duplicate.status_code == 409
+            assert client.get(f'/api/progress/{handle}').status_code == 200
+        finally:
+            release.set()
+        assert future.result()['run_id'] == str(handle)
+    assert client.get(f'/api/progress/{handle}').status_code == 404
+    assert not module.active_progress
