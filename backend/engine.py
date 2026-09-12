@@ -10,7 +10,7 @@ from .models import Facility, TIERS, topology, capacity_state, CapacityTracker
 RATES = json.loads((Path(__file__).resolve().parent.parent / 'data/failure_rates.json').read_text())
 RATE_MAP = {r['component']: r for r in RATES}
 DATASET_VERSION = '2026-09-12-audited-assumptions-v2'
-ENGINE_VERSION = '2.0.0'
+ENGINE_VERSION = '2.1.0'
 MODEL_NOTES = [
     'Mixed dataset: 3 IEEE-493-citing secondary-source records and 7 explicitly illustrative PDU/CRAC/IT records. Not publication-ready field evidence.',
     'Source audit: Wiboonrat (2020) Table 2 has no PDU or CRAC rates. Generator row prints 0.58/year, but 115/266 gives 0.432330827/year. Neither interpretation is independently verified.',
@@ -25,6 +25,8 @@ MODEL_NOTES = [
     'INR budgets are editable educational planning assumptions, NOT researched market prices or quotes. Exclude installation, tax, land, staffing, fuel, software licensing and OPEX; representative IT count is not a procurement BOM.',
     '95% normal mean intervals are approximate; fewer than 30 outage trials warns of sparse evidence. Zero-outage intervals use a conservative exact trial-risk bound, never certainty. These intervals exclude input/model uncertainty.',
     'Year-labelled downtime is annualized; SLA breach probability is over the full trial horizon. Worst trial replay is selected, not representative.',
+    'Scenario event counts count affected units; scenario incidents count distinct shared-event starts. A forced maintenance fault is skipped when no same-group peer exists, and skipped trials are reported.',
+    'Random draws are coupled by component, trial and renewal ordinal for rate sensitivity reruns. Changing engine version can change seeded numerical results.',
     'Optional diagnostics use at most 1000 paired trials, independent mode, no maintenance: actual one-factor +/-50% rate reruns and a separate dependency comparison. Sparse paired intervals and rankings are exploratory, not guaranteed.'
 ]
 
@@ -156,7 +158,10 @@ def event_batches(config, groups, rate_factors=None):
                         for trial in active:
                             t = float(times[trial])
                             batch[trial].extend([(t, 1, c['id'], kind), (t + rate['mttr_hours'], 0, c['id'], kind)])
-                        times[active] += rate['mttr_hours'] + rng.exponential(8760 / annual, active.size)
+                        # Fixed draw positions couple the same trial AND renewal
+                        # ordinal across rate reruns, even when active masks differ.
+                        waits = rng.exponential(8760 / annual, 256)
+                        times[active] += rate['mttr_hours'] + waits[active]
                         active = active[times[active] < hours]
         for j, events in enumerate(batch[:min(256, sim.num_trials-offset)]):
             rng = np.random.default_rng(np.random.SeedSequence([sim.seed, 900, offset+j]))
@@ -172,6 +177,8 @@ def event_batches(config, groups, rate_factors=None):
                     t += float(rng.exponential(8760/rate))
             m = config.maintenance
             if m.enabled:
+                # Maintenance draws must not shift when dependency is toggled.
+                rng = np.random.default_rng(np.random.SeedSequence([sim.seed, 901, offset+j]))
                 events.extend([(m.start_hour, 1, m.component_id, 'MAINTENANCE'),
                                (m.start_hour+m.duration_hours, 0, m.component_id, 'MAINTENANCE')])
                 if m.inject_failure:
@@ -211,8 +218,13 @@ def simulate(config: Facility, rate_factors=None) -> dict:
     minima = np.full(n, config.it_load_kw)
     overlaps, worst_index, worst_events, worst_down = 0, 0, [], -1
     scenario_counts = Counter()
+    scenario_incidents = Counter()
+    forced_fault_trials = 0
     sample_events = []
     for i, trial_events in event_batches(config, groups, rate_factors):
+        incidents = {(t, kind) for t, action, _, kind in trial_events if action == 1 and kind not in RATE_MAP}
+        scenario_incidents.update(kind for _, kind in incidents)
+        forced_fault_trials += int(any(kind == 'FORCED_FAILURE' for _, kind in incidents))
         for _, action, _, kind in trial_events:
             if action == 1:
                 if kind in RATE_MAP:
@@ -262,7 +274,7 @@ def simulate(config: Facility, rate_factors=None) -> dict:
                             'ci_high': min(100, avg+half), 'outage_trials': int(np.count_nonzero(downtime[:k]))})
     bins = [0, 1, 15, 60, 240, 1440, float('inf')]
     histogram = [{'range': 'No outage', 'trials': int(np.sum(annual_minutes == 0))}]
-    labels = ['< 1 min', '1–15 min', '15–60 min', '1–4 hrs', '4–24 hrs', '> 24 hrs']
+    labels = ['> 0–1 min', '> 1–15 min', '> 15–60 min', '> 1–4 hrs', '> 4–24 hrs', '> 24 hrs']
     for j, label in enumerate(labels):
         histogram.append({'range': label, 'trials': int(np.sum((annual_minutes > bins[j]) & (annual_minutes <= bins[j+1])))})
     base = config.model_copy(deep=True)
@@ -276,13 +288,18 @@ def simulate(config: Facility, rate_factors=None) -> dict:
         m = config.maintenance
         maintenance = {'component': m.component_id, 'window_hours': m.duration_hours,
                        'maintenance_only_maintained': capacity_state(config, groups, {m.component_id})['service_maintained'],
-                       'forced_fault': m.inject_failure, 'window_outage_trials': int(np.count_nonzero(maintenance_down)),
+                       'forced_fault': m.inject_failure, 'forced_fault_applied_trials': forced_fault_trials,
+                       'forced_fault_skipped_trials': n-forced_fault_trials if m.inject_failure else 0,
+                       'window_outage_trials': int(np.count_nonzero(maintenance_down)),
                        'mean_window_downtime_minutes': float(np.mean(maintenance_down)*60),
                        'window_outage_probability_ci95': exact_probability_interval(int(np.count_nonzero(maintenance_down)), n)}
     return {
-        'scenario_events': dict(scenario_counts), 'maintenance': maintenance,
+        'scenario_events': dict(scenario_counts), 'scenario_incidents': dict(scenario_incidents), 'maintenance': maintenance,
         'budget': budget_estimate(config, groups),
-        'effective_rates': {kind: rate_value(config, kind, rate_factors or {}) for kind in RATE_MAP},
+        'effective_rates': {kind: rate_value(config, kind, rate_factors or {})
+                            if (kind in {g['kind'] for g in groups} or (kind == 'OS' and config.it.enabled))
+                            and not (kind == 'GENERATOR' and sim.operating_mode == 'utility') else 0.0
+                            for kind in RATE_MAP},
         'redundancy': topology_name, 'trials_run': n, 'seed': sim.seed,
         'simulated_years': n * sim.simulated_years_per_trial,
         'availability_percent': mean, 'availability_ci95': mean_ci,
