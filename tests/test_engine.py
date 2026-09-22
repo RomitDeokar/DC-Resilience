@@ -402,3 +402,57 @@ def test_active_progress_is_isolated_cleaned_and_does_not_expose_inputs(monkeypa
         assert future.result()['run_id'] == str(handle)
     assert client.get(f'/api/progress/{handle}').status_code == 404
     assert not module.active_progress
+
+
+# Facility operations remain deterministic and isolated from the Monte Carlo model.
+def test_operations_distribution_and_plant_cascades():
+    from backend.operations import Design, Scenario, evaluate
+    d = Design()
+    assert evaluate(Scenario(design=d))['service_maintained']
+    for fault in ['ats-1', 'plant-1']:
+        state = evaluate(Scenario(design=d, failed_components=[fault]))
+        assert not state['service_maintained']
+        assert state['cooling_kw'] == 0
+    assert evaluate(Scenario(design=d, failed_components=['pdu-1']))['service_maintained']
+    assert evaluate(Scenario(design=d, failed_components=['pdu-1', 'pdu-2']))['power_kw'] == 0
+    d.cooling_architecture = 'Air cooled'
+    assert all(n['kind'] != 'plant' for n in evaluate(Scenario(design=d))['nodes'])
+    assert evaluate(Scenario(design=d))['service_maintained']
+
+
+def test_operations_scenarios_and_sweep_match_applied_design():
+    from backend.operations import Design
+    d = Design().model_dump()
+    catalog = client.post('/api/operations/scenarios', json=d).json()
+    assert len(catalog) == 13
+    for scenario in catalog:
+        response = client.post('/api/operations/failure', json={'design': d, 'failed_components': scenario['failed_components']})
+        assert response.status_code == 200
+    sweep = client.post('/api/operations/sweep', json=d).json()
+    assert sweep['baseline_maintained']
+    assert sweep['tested'] == 24
+    vulnerable = {r['component_id'] for r in sweep['results'] if not r['service_maintained']}
+    assert {'ats-1', 'plant-1', 'cooling-1'} <= vulnerable
+    d.update(ats_units=2, plant_units=2, cooling_units=4)
+    assert client.post('/api/operations/sweep', json=d).json()['vulnerabilities'] == 0
+    d.update(ups_units=1, utility_feeds=0, generator_units=0, cooling_architecture='Air cooled')
+    ids = {r['id'] for r in client.post('/api/operations/scenarios', json=d).json()}
+    assert not ids.intersection({'dual-ups', 'plant', 'utility', 'blackout', 'generator'})
+
+
+def test_operations_validation_autonomy_and_websocket():
+    from backend.operations import Design
+    d = Design().model_dump()
+    assert client.post('/api/operations/failure', json={'failed_components':['unknown']}).status_code == 422
+    assert client.post('/api/infrastructure/analyze', json={**d, 'ats_units':0}).status_code == 422
+    assert client.post('/api/infrastructure/analyze', json={**d, 'pdu_capacity_kw':-5}).status_code == 422
+    faults = ['utility-1', 'utility-2']
+    early = client.post('/api/operations/failure', json={'design':d, 'failed_components':faults}).json()
+    late = client.post('/api/operations/failure', json={'design':d, 'failed_components':faults, 'elapsed_minutes':2880}).json()
+    assert early['service_maintained'] and early['source'] == 'Generator'
+    assert not late['service_maintained'] and late['cooling_kw'] == 0
+    with client.websocket_connect('/ws/telemetry') as ws:
+        ws.send_json({'design':d, 'failed_components':['plant-1']})
+        sample = ws.receive_json()
+        assert sample['synthetic'] and sample['state'] == 'CRITICAL'
+        assert 'thermal' in [a['id'] for a in sample['alerts']]
