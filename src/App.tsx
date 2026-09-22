@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Activity, ArrowRight, ArrowUpRight, BarChart3, BookOpen, Check, CheckCircle2, ChevronDown, ChevronRight, CircleHelp, Clock3, Code2, Database, Download, FileJson, FileSpreadsheet, FlaskConical, FolderOpen, GitCompareArrows, History, Info, LayoutDashboard, LoaderCircle, Menu, Play, Plus, Printer, Search, ShieldCheck, Trash2, X, Zap } from 'lucide-react'
 import { Operations } from './Operations'
-import { Gauge, Server, SlidersHorizontal } from 'lucide-react'
+import { RackPlanner, SoftwareStack, useFacilityModel } from './Facility'
+import { Gauge, Grid3X3, Layers, Server, SlidersHorizontal } from 'lucide-react'
 import { ConfigPanel } from './ConfigPanel'
 import { FacilityDiagram, FailureLab } from './Visualizer'
 import { ResultsDashboard, Comparison } from './Analytics'
@@ -10,13 +11,14 @@ import { api } from './api'
 import { deleteRun, exportRun, loadRuns, saveRun } from './exports'
 import { availability, DEFAULT_CONFIG, number, configError, normalizeConfig, inr, type Config, type FacilityState, type Page, type Rate, type Run, type Progress } from './types'
 
-const OPS_NAV = [{id:'overview',label:'Operations overview',icon:LayoutDashboard},{id:'designer',label:'Infrastructure designer',icon:SlidersHorizontal},{id:'resilience',label:'Resilience assessment',icon:ShieldCheck},{id:'calculator',label:'Capacity calculators',icon:Gauge},{id:'faults',label:'Facility fault explorer',icon:Zap},{id:'dcim',label:'DCIM monitor',icon:Activity}] as const
+const OPS_NAV = [{id:'overview',label:'Operations overview',icon:LayoutDashboard},{id:'designer',label:'Infrastructure designer',icon:SlidersHorizontal},{id:'racks',label:'Rack floor planner',icon:Grid3X3},{id:'software',label:'Software stack & threats',icon:Layers},{id:'resilience',label:'Resilience assessment',icon:ShieldCheck},{id:'calculator',label:'Capacity calculators',icon:Gauge},{id:'faults',label:'Facility fault explorer',icon:Zap},{id:'dcim',label:'DCIM monitor',icon:Activity}] as const
 const NAV = [{id:'simulation',label:'Simulation workspace',icon:LayoutDashboard},{id:'lab',label:'Live failure lab',icon:Zap},{id:'comparison',label:'Architecture comparison',icon:GitCompareArrows},{id:'history',label:'Run history',icon:History}] as const
-const TITLES: Record<Page,[string,string]> = {overview:['Operations overview','Facility capacity, resilience and operating conditions.'],designer:['Infrastructure designer','Configure equipment, capacity and distribution dependencies.'],resilience:['Resilience assessment','Understand the margins. Find the single points of failure.'],calculator:['Capacity calculators','Engineering fundamentals, without the guesswork.'],faults:['Facility fault explorer','Test your design against the unexpected.'],dcim:['DCIM monitor','A live view of your synthetic facility telemetry.'],simulation:['Simulation workspace','Configure, simulate and evaluate your redundancy architecture.'],lab:['Live failure lab','Explore what happens when your infrastructure fails.'],comparison:['Architecture comparison','Compare N, N+1 and 2N under identical conditions.'],history:['Run history','Your experiments, saved locally and ready to revisit.'],references:['Reference library','Traceable failure data. Clearly stated assumptions.'],methodology:['Methodology','An open, reproducible approach to reliability engineering.']}
+const TITLES: Record<Page,[string,string]> = {overview:['Operations overview','Facility capacity, resilience and operating conditions.'],designer:['Infrastructure designer','Configure equipment, capacity and distribution dependencies.'],racks:['Rack floor planner','Place racks, populate elevations and check power and space per rack.'],software:['Software stack & threats','Model services, dependencies, patch levels and malware propagation.'],resilience:['Resilience assessment','Understand the margins. Find the single points of failure.'],calculator:['Capacity calculators','Engineering fundamentals, without the guesswork.'],faults:['Facility fault explorer','Test your design against the unexpected.'],dcim:['DCIM monitor','A live view of your synthetic facility telemetry.'],simulation:['Simulation workspace','Configure, simulate and evaluate your redundancy architecture.'],lab:['Live failure lab','Explore what happens when your infrastructure fails.'],comparison:['Architecture comparison','Compare N, N+1 and 2N under identical conditions.'],history:['Run history','Your experiments, saved locally and ready to revisit.'],references:['Reference library','Traceable failure data. Clearly stated assumptions.'],methodology:['Methodology','An open, reproducible approach to reliability engineering.']}
 function getPage(): Page { const p=location.hash.slice(1); return Object.hasOwn(TITLES,p)?p as Page:'overview' }
 
 export default function App() {
   const [page,setPage] = useState<Page>(getPage)
+  const facility = useFacilityModel()
   const [config,setConfig] = useState<Config>(structuredClone(DEFAULT_CONFIG))
   const [run,setRun] = useState<Run|null>(null)
   const [comparison,setComparison] = useState<Run|null>(null)
@@ -178,6 +180,8 @@ export default function App() {
         {page==='lab'&&<FailureLab config={config} state={topologyBusy?null:state} failed={failed} busy={busy||labBusy||topologyBusy||!!topologyError} duration={duration} onDuration={hours=>void inject(failed,`Scenario duration set to ${hours} hours`,hours)} unavailable={!!topologyError} onToggle={id=>void inject(failed.includes(id)?failed.filter(x=>x!==id):[...failed,id],`${failed.includes(id)?'Repaired':'Failed'} ${id}`)} onReset={()=>void inject([],'All components restored')} onScenario={scenario} logs={logs}/>}
       </div></div>}
       <Operations page={page} navigate={nav}/>
+      {page==='racks'&&<RackPlanner model={facility} navigate={nav}/>}
+      {page==='software'&&<SoftwareStack model={facility} navigate={nav}/>}
       {page==='history'&&<HistoryView history={history} onOpen={openHistory} onDelete={removeHistory} onReport={report} onNew={newExperiment}/>}
       {page==='references'&&<References rates={rates}/>}
       {page==='methodology'&&<Methodology/>}

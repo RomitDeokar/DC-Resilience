@@ -1,5 +1,5 @@
 export type Redundancy = 'N' | 'N+1' | '2N'
-export type Page = 'overview' | 'designer' | 'resilience' | 'calculator' | 'dcim' | 'faults' | 'simulation' | 'lab' | 'comparison' | 'history' | 'references' | 'methodology'
+export type Page = 'overview' | 'designer' | 'racks' | 'software' | 'resilience' | 'calculator' | 'dcim' | 'faults' | 'simulation' | 'lab' | 'comparison' | 'history' | 'references' | 'methodology'
 export interface Config {
   facility_name: string; tier_target: 'I' | 'II' | 'III' | 'IV'; it_load_kw: number;
   power: { redundancy: Redundancy; ups_capacity_kw_each: number; generator_capacity_kw_each: number; pdu_capacity_kw_each: number };
