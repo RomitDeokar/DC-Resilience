@@ -11,12 +11,14 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from .operations import router as operations_router
+from .facility import router as facility_router
 from .models import Facility, Injection, topology, capacity_state, work_estimate
 from .engine import simulate, RATES, MODEL_NOTES, paired_comparison, diagnostics, DATASET_VERSION, ENGINE_VERSION
 
 app = FastAPI(title='DC-Resilience API', version=ENGINE_VERSION, description='Reproducible Monte Carlo data centre redundancy experiments. No paid APIs.')
 # Register operations before the SPA catch-all so GET and WebSocket routes resolve.
 app.include_router(operations_router)
+app.include_router(facility_router)
 
 # Bound concurrent CPU jobs while leaving health/topology/failure injection responsive.
 slots = threading.BoundedSemaphore(2)
