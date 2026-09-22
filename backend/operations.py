@@ -254,7 +254,7 @@ def analyze(c: Design):
             warnings.append(f'{name}: {arch} calls for at least {needed} units; only {count} configured.')
     if c.expected_pue * c.it_load_kw < heat:
         warnings.append('Expected facility power is smaller than IT plus electrical losses; revise PUE/loss assumptions.')
-    return {'facility_name': c.facility_name, 'score': sum(x['points'] for x in checklist),
+    return {'design': c.model_dump(), 'facility_name': c.facility_name, 'score': sum(x['points'] for x in checklist),
             'subsystems': subsystems, 'network_survivable': net, 'checklist': checklist,
             'warnings': warnings, 'baseline': evaluate(Scenario(design=c)),
             'tier_target': c.tier_target, 'tier_note': 'Tier ' + c.tier_target + ' is a design target only. Concurrent maintainability, independent distribution paths and fault tolerance require a site-specific engineering audit.',
