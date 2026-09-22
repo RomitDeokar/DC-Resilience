@@ -36,6 +36,11 @@ class Design(StrictModel):
     generator_capacity_kw: float = Field(800, gt=0, le=100000)
     fuel_hours: float = Field(48, ge=0, le=720)
     battery_minutes: float = Field(15, ge=0, le=240)
+    ats_units: int = Field(1, ge=1, le=8)
+    pdu_units: int = Field(2, ge=1, le=24)
+    pdu_capacity_kw: float = Field(600, gt=0, le=100000)
+    plant_units: int = Field(1, ge=1, le=8)
+    plant_capacity_kw: float = Field(1000, gt=0, le=100000)
     cooling_architecture: Literal['Chilled water', 'Air cooled', 'In-row cooling'] = 'Chilled water'
     cooling_redundancy: Architecture = 'N+1'
     cooling_units: int = Field(3, ge=1, le=24)
@@ -169,7 +174,10 @@ def default_design():
 def nodes_for(c: Design):
     specs = [('utility', c.utility_feeds, 'Utility feed', c.it_load_kw * c.expected_pue),
              ('generator', c.generator_units, 'Generator', c.generator_capacity_kw),
+             ('ats', c.ats_units, 'Transfer switch', c.it_load_kw * c.expected_pue),
              ('ups', c.ups_units, 'UPS module', c.ups_capacity_kw),
+             ('pdu', c.pdu_units, 'Power distribution', c.pdu_capacity_kw),
+             ('plant', c.plant_units if c.cooling_architecture == 'Chilled water' else 0, 'Chilled-water plant', c.plant_capacity_kw),
              ('cooling', c.cooling_units, 'Cooling unit', c.cooling_capacity_kw),
              ('isp', c.isp_connections, 'ISP transit', 0),
              ('core', c.core_switches, 'Core switch', 0),
@@ -181,7 +189,7 @@ def nodes_for(c: Design):
 
 class Scenario(StrictModel):
     design: Design = Field(default_factory=Design)
-    failed_components: list[str] = Field(default_factory=list, max_length=124)
+    failed_components: list[str] = Field(default_factory=list, max_length=172)
     elapsed_minutes: float = Field(0, ge=0, le=43200)
 
 
@@ -196,23 +204,27 @@ def evaluate(s: Scenario):
     utility = count('utility') > 0
     gen_capacity = count('generator') * c.generator_capacity_kw if s.elapsed_minutes < c.fuel_hours * 60 else 0
     source_ratio = 1 if utility else min(1, gen_capacity / (c.it_load_kw * c.expected_pue))
+    source_ratio *= int(count('ats') > 0)
     battery_active = source_ratio < 1 and s.elapsed_minutes < c.battery_minutes
     # Battery sustains IT only, not the mechanical plant. No implicit cooling ride-through.
     ups = count('ups') * c.ups_capacity_kw
-    power_kw = min(ups, c.it_load_kw * (1 if battery_active else source_ratio))
+    power_kw = min(ups, count('pdu') * c.pdu_capacity_kw, c.it_load_kw * (1 if battery_active else source_ratio))
     heat = c.it_load_kw + c.power_losses_kw
-    cooling_kw = count('cooling') * c.cooling_capacity_kw * source_ratio
+    cooling_kw = count('cooling') * c.cooling_capacity_kw
+    if c.cooling_architecture == 'Chilled water':
+        cooling_kw = min(cooling_kw, count('plant') * c.plant_capacity_kw)
+    cooling_kw *= source_ratio
     network = count('isp') > 0 and count('core') > 0 and count('distribution') > 0
     served = max(0, min(c.it_load_kw, power_kw, c.it_load_kw * cooling_kw / heat, c.it_load_kw if network else 0))
     maintained = math.isclose(served, c.it_load_kw, rel_tol=1e-10)
     for node in nodes:
-        node['status'] = 'failed' if node['id'] in failed else ('warning' if (node['kind'] == 'cooling' and source_ratio < 1) or (node['kind'] in ['ups', 'core', 'distribution'] and power_kw < c.it_load_kw) else 'operational')
+        node['status'] = 'failed' if node['id'] in failed else ('warning' if (node['kind'] in ['plant', 'cooling'] and cooling_kw < heat) or (node['kind'] in ['ups', 'pdu', 'core', 'distribution'] and power_kw < c.it_load_kw) else 'operational')
     return {'nodes': nodes, 'state': 'CRITICAL' if not maintained else 'DEGRADED' if failed else 'NORMAL',
             'service_maintained': maintained, 'served_it_kw': served, 'lost_it_kw': c.it_load_kw - served,
             'power_kw': power_kw, 'cooling_kw': cooling_kw, 'network_online': network,
-            'source': 'Utility' if utility else 'Generator + battery' if battery_active and gen_capacity else 'Battery (IT only)' if battery_active else 'Generator' if gen_capacity else 'Unavailable',
+            'source': 'ATS isolated / battery only' if not count('ats') and battery_active else 'ATS isolated' if not count('ats') else 'Utility' if utility else 'Generator + battery' if battery_active and gen_capacity else 'Battery (IT only)' if battery_active else 'Generator' if gen_capacity else 'Unavailable',
             'failed_components': sorted(failed), 'timestamp': datetime.now(timezone.utc).isoformat(),
-            'note': 'Simplified pooled-capacity graph; topology independence is not verified. No ATS switching delay or thermal inertia. Battery supports IT only; cooling needs utility/generator power. Elapsed time controls battery and fuel exhaustion.'}
+            'note': 'Simplified pooled-capacity graph; topology independence is not verified. ATS isolates both mechanical and UPS input supply; PDUs limit IT delivery; chilled-water units depend on surviving plant capacity. No switching delay or thermal inertia. Battery supports IT only; cooling needs utility/generator power. Elapsed time controls battery and fuel exhaustion.'}
 
 
 @router.post('/api/operations/failure')
@@ -236,11 +248,13 @@ def analyze(c: Design):
                            'utilization_percent': demand / total * 100 if total else None,
                            'architecture': arch})
     p, cool, gen = subsystems
+    distribution_ok = c.ats_units >= 2 and (c.pdu_units - 1) * c.pdu_capacity_kw >= c.it_load_kw
+    plant_ok = c.cooling_architecture != 'Chilled water' or (c.plant_units - 1) * c.plant_capacity_kw >= heat
     net = min(c.isp_connections, c.core_switches, c.distribution_switches) >= 2 and c.network_redundancy != 'Single path'
     rack_ok = c.rack_count * c.rack_density_kw >= c.it_load_kw
     checks = [
-        ('UPS single-unit tolerance', p['single_failure_survivable'], 25, 'Capacity after losing one UPS meets the IT load.'),
-        ('Cooling single-unit tolerance', cool['single_failure_survivable'], 25, 'Capacity after losing one unit covers IT plus electrical losses.'),
+        ('Power chain single-unit tolerance', p['single_failure_survivable'] and distribution_ok, 25, 'UPS and PDU capacity after one loss meets IT demand; at least two transfer switches.'),
+        ('Cooling single-unit tolerance', cool['single_failure_survivable'] and plant_ok, 25, 'Cooling units and chilled-water plant (if used) each cover heat demand after one loss.'),
         ('Network component diversity', net, 20, 'Two or more ISPs, core and distribution switches; not single-path routing.'),
         ('Standby generation tolerance', gen['single_failure_survivable'] and c.fuel_hours >= 24, 15, 'One generator can be removed while meeting facility load; at least 24 h fuel.'),
         ('Utility diversity', c.utility_feeds >= 2, 5, 'At least two configured utility feeds. Physical independence is unverified.'),
@@ -248,6 +262,10 @@ def analyze(c: Design):
         ('Rack capacity', rack_ok, 5, 'Configured rack capacity meets the IT load.')]
     checklist = [{'criterion': name, 'met': bool(met), 'points': weight if met else 0, 'max_points': weight, 'description': description} for name, met, weight, description in checks]
     warnings = []
+    if not distribution_ok:
+        warnings.append('Power distribution has a single-unit vulnerability: review ATS count and surviving PDU capacity.')
+    if not plant_ok:
+        warnings.append('Chilled-water plant is a single-unit vulnerability. Redundant room cooling alone does not remove it.')
     for name, count, cap, demand, arch in specs[:2]:
         needed = installed(math.ceil(demand / cap), arch)
         if count < needed:
@@ -259,6 +277,45 @@ def analyze(c: Design):
             'warnings': warnings, 'baseline': evaluate(Scenario(design=c)),
             'tier_target': c.tier_target, 'tier_note': 'Tier ' + c.tier_target + ' is a design target only. Concurrent maintainability, independent distribution paths and fault tolerance require a site-specific engineering audit.',
             'disclaimer': DISCLAIMER}
+
+
+@router.post('/api/operations/scenarios')
+def scenarios(c: Design):
+    nodes = nodes_for(c)
+    def ids(kind, count=None):
+        return [n['id'] for n in nodes if n['kind'] == kind][:count]
+    specs = [
+        ('ups', 'Single UPS failure', 'Power', ids('ups', 1)),
+        ('dual-ups', 'Two UPS failures', 'Power', ids('ups', 2)),
+        ('utility', 'Primary utility loss', 'Power', ids('utility', 1)),
+        ('blackout', 'Utility blackout', 'Power', ids('utility')),
+        ('generator', 'Generator unavailable', 'Power', ids('generator', 1)),
+        ('ats', 'Transfer switch failure', 'Power', ids('ats', 1)),
+        ('pdu', 'PDU failure', 'Power', ids('pdu', 1)),
+        ('cooling', 'Single cooling failure', 'Cooling', ids('cooling', 1)),
+        ('plant', 'Chilled-water plant loss', 'Cooling', ids('plant', 1)),
+        ('all-cooling', 'Total cooling outage', 'Cooling', ids('cooling')),
+        ('core', 'Core switch failure', 'Network', ids('core', 1)),
+        ('isp', 'Upstream fiber cut', 'Network', ids('isp', 1)),
+        ('network', 'All transit links lost', 'Network', ids('isp')),
+    ]
+    return [{'id': key, 'name': name, 'category': category, 'failed_components': failed}
+            for key, name, category, failed in specs if failed and (key != 'dual-ups' or len(failed) == 2)]
+
+
+@router.post('/api/operations/sweep')
+def sweep(c: Design):
+    """Bounded, deterministic N−1 screening, not a Tier/maintenance certification."""
+    rows = []
+    for node in nodes_for(c):
+        impact = evaluate(Scenario(design=c, failed_components=[node['id']]))
+        rows.append({'component_id': node['id'], 'name': node['name'], 'kind': node['kind'],
+                     'service_maintained': impact['service_maintained'],
+                     'lost_it_kw': impact['lost_it_kw'], 'served_it_kw': impact['served_it_kw']})
+    return {'baseline_maintained': evaluate(Scenario(design=c))['service_maintained'],
+            'tested': len(rows), 'vulnerabilities': sum(not r['service_maintained'] for r in rows),
+            'results': sorted(rows, key=lambda r: (-r['lost_it_kw'], r['component_id'])),
+            'note': 'Each component is removed independently from a healthy baseline at elapsed time zero. No concurrent faults, switching delays, fuel exhaustion or physical path verification. Not a probability of failure or a Tier assessment.'}
 
 
 def reading(s: Scenario, step: int, rng):
