@@ -9,6 +9,9 @@ from .models import Facility, TIERS, topology, capacity_state, CapacityTracker
 
 RATES = json.loads((Path(__file__).resolve().parent.parent / 'data/failure_rates.json').read_text())
 RATE_MAP = {r['component']: r for r in RATES}
+# Explicit, frozen stream ids. Deriving them from file order would silently change
+# every seeded result whenever a rate row is reordered or inserted.
+STREAM_IDS = {r['component']: int(r.get('stream', index)) for index, r in enumerate(RATES)}
 DATASET_VERSION = '2026-09-12-audited-assumptions-v2'
 ENGINE_VERSION = '2.3.0'
 MODEL_NOTES = [
@@ -40,6 +43,24 @@ def exact_probability_interval(count: int, n: int) -> list[float]:
     """Two-sided 95% Clopper-Pearson interval, including zero/all successes."""
     return [float(beta.ppf(.025, count, n-count+1)) if count else 0.0,
             float(beta.ppf(.975, count+1, n-count)) if count < n else 1.0]
+
+
+_EXCEEDANCE_GRID = [0, 1, 5, 15, 30, 60, 120, 240, 480, 720, 1440, 2880, 4320, 7200, 14400, 28800, 43200, 52560, 105120]
+
+
+def _exceedance(annual_minutes) -> list[dict]:
+    """Exact P(annual downtime > x) at a fixed grid of minute thresholds.
+
+    A single year's distribution is dominated by the "no outage" mass, which hides
+    the interesting tail in a linear histogram. This monotone curve exposes rare,
+    severe years directly.
+    """
+    values = np.asarray(annual_minutes, dtype=float)
+    if values.size == 0:
+        return [{'minutes': 0.0, 'probability': 0.0}]
+    top = float(values.max())
+    thresholds = sorted({t for t in _EXCEEDANCE_GRID if t < top} | {top})
+    return [{'minutes': float(t), 'probability': float(np.mean(values > t))} for t in thresholds]
 
 
 def single_failure_events(events):
@@ -129,7 +150,9 @@ def event_durations(events):
 def rate_value(config, kind, factors):
     value = RATE_MAP[kind]['failure_rate_per_year']
     if kind == 'GENERATOR' and config.simulation.generator_rate_basis == 'count_exposure':
-        value = 115 / 266
+        # Alternative interpretation kept in the dataset (provenance stays data-driven).
+        alt = RATE_MAP[kind].get('alternative_rate')
+        value = alt['failures'] / alt['exposure_unit_years'] if alt else 115 / 266
     return value * factors.get(kind, 1)
 
 
@@ -152,7 +175,7 @@ def event_batches(config, groups, rate_factors=None):
                 for c in group['components']:
                     bank = 0 if c['bank'] == 'A' else 1
                     unit = int(c['id'].split('-')[1][1:])
-                    rng = np.random.default_rng(np.random.SeedSequence([sim.seed, list(RATE_MAP).index(kind), bank, unit, offset]))
+                    rng = np.random.default_rng(np.random.SeedSequence([sim.seed, STREAM_IDS[kind], bank, unit, offset]))
                     times = rng.exponential(8760 / annual, 256)
                     active = np.flatnonzero(times < hours)
                     while active.size:
@@ -326,6 +349,7 @@ def simulate(config: Facility, rate_factors=None, progress=None) -> dict:
         'worst_surviving_capacity_kw': float(np.min(minima)),
         'infra_cost_index': len(components) / base_count, 'component_count': len(components),
         'convergence': convergence, 'histogram': histogram,
+        'exceedance': _exceedance(annual_minutes),
         'failure_breakdown': [{'component': r['label'], 'kind': r['component'], 'failures': failures[r['component']]} for r in RATES],
         'sample_events': sample_events,
         'trial_results': [{'trial_id': i+1, 'availability_percent': float(availability[i]),

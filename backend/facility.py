@@ -62,6 +62,17 @@ class Layout(Strict):
         cells = {(r.row, r.col) for r in self.racks}
         if len(cells) != len(self.racks):
             raise ValueError('Two racks cannot occupy the same floor cell.')
+        # Device ids are the global host identity used by services, faults and
+        # threats. Per-rack uniqueness is not enough: hosts_index keys on the id,
+        # so a duplicate would silently overwrite one device with another.
+        all_ids = [d.id for r in self.racks for d in r.devices]
+        if len(all_ids) != len(set(all_ids)):
+            seen, dupes = set(), set()
+            for did in all_ids:
+                if did in seen:
+                    dupes.add(did)
+                seen.add(did)
+            raise ValueError(f'Device ids must be unique across all racks. Duplicate: {", ".join(sorted(dupes))}.')
         for r in self.racks:
             if r.row >= self.rows or r.col >= self.cols:
                 raise ValueError(f'Rack {r.id} is outside the {self.rows}x{self.cols} floor grid.')
@@ -127,13 +138,14 @@ def racks_evaluate(layout: Layout):
 ServiceTier = Literal['hypervisor', 'operating_system', 'database', 'message_queue', 'application', 'load_balancer', 'orchestration', 'identity', 'monitoring', 'backup']
 ThreatKind = Literal['virus', 'worm', 'ransomware', 'misconfiguration', 'bad_patch']
 
-# Assumed recovery effort (hours) per threat. Editable planning assumptions, not measured data.
+# Fixed planning constants (hours) per threat. They are NOT user-editable in this
+# build and are not measured data.
 THREAT_RECOVERY_HOURS = {'virus': 6, 'worm': 12, 'ransomware': 48, 'misconfiguration': 2, 'bad_patch': 3}
 THREAT_TEXT = {
     'virus': 'Executes on the origin host and reaches reachable unpatched hosts in the same segment each hop.',
     'worm': 'Self-propagating: crosses segments unless segmentation is enforced; patched hosts are immune.',
-    'ransomware': 'Encrypts local and reachable data. Storage-backed services are lost until restored from backup.',
-    'misconfiguration': 'A pushed configuration change breaks the origin host and hosts sharing its role. No spread.',
+    'ransomware': 'Encrypts local and reachable data. Storage-backed services on the affected hosts are lost until restored from backup.',
+    'misconfiguration': 'A pushed configuration change breaks the origin host only. Host roles and role-based rollout are not modelled.',
     'bad_patch': 'A faulty update rolls out to every host in the same segment that is marked patched.',
 }
 
@@ -146,6 +158,19 @@ class Service(Strict):
     min_replicas: int = Field(1, ge=1, le=200)
     depends_on: list[str] = Field(default_factory=list, max_length=50)
     stateful: bool = False
+
+    @model_validator(mode='after')
+    def unique_hosts(self):
+        # Each listed host is one independent failure domain. Repeating a host id
+        # must not be counted as a second healthy replica.
+        if len(self.hosts) != len(set(self.hosts)):
+            seen, dupes = set(), set()
+            for host in self.hosts:
+                if host in seen:
+                    dupes.add(host)
+                seen.add(host)
+            raise ValueError(f'Service {self.id} lists the same replica host more than once: {", ".join(sorted(dupes))}.')
+        return self
 
 
 class Threat(Strict):
@@ -174,6 +199,33 @@ class SoftwareModel(Strict):
                     raise ValueError(f'{s.id} depends on unknown service {d}.')
                 if d == s.id:
                     raise ValueError(f'{s.id} cannot depend on itself.')
+        # The advertised model resolves dependencies bottom-up, so the graph must
+        # be acyclic. Return the offending path instead of silently accepting a
+        # graph whose startup/steady-state semantics are undefined.
+        graph = {s.id: list(s.depends_on) for s in self.services}
+        WHITE, GREY, BLACK = 0, 1, 2
+        colour = {sid: WHITE for sid in graph}
+        path: list[str] = []
+
+        def visit(node: str) -> list[str] | None:
+            colour[node] = GREY
+            path.append(node)
+            for dep in graph[node]:
+                if colour[dep] == GREY:
+                    return path[path.index(dep):] + [dep]
+                if colour[dep] == WHITE:
+                    found = visit(dep)
+                    if found:
+                        return found
+            path.pop()
+            colour[node] = BLACK
+            return None
+
+        for sid in graph:
+            if colour[sid] == WHITE:
+                cycle = visit(sid)
+                if cycle:
+                    raise ValueError(f'Dependency cycle detected: {" -> ".join(cycle)}. The bottom-up service model requires an acyclic graph.')
         return self
 
 
@@ -188,10 +240,19 @@ def hosts_index(layout: Layout) -> dict[str, dict]:
 
 
 def spread(threat: Threat, hosts: dict[str, dict], model: SoftwareModel) -> tuple[set[str], list[str]]:
-    """Breadth-first propagation over hosts. Returns infected ids and a hop-by-hop trace."""
+    """Breadth-first propagation over hosts. Returns infected ids and a hop-by-hop trace.
+
+    A powered-off host cannot execute network propagation: an offline origin
+    yields no infection unless a separate latent-compromise scenario is added.
+    """
     if threat.origin_host not in hosts:
         return set(), [f'{threat.origin_host} is not a host in the layout; threat ignored.']
     origin = hosts[threat.origin_host]
+    failed = set(model.failed_hosts)
+    if not origin['rack_online']:
+        return set(), [f'{origin["id"]} is on an offline rack; a powered-off origin cannot propagate {threat.kind}.']
+    if origin['id'] in failed:
+        return set(), [f'{origin["id"]} has a hardware failure; the host is offline and cannot propagate {threat.kind}.']
     infected = {origin['id']}
     trace = [f'Hop 0 · {threat.kind} lands on {origin["id"]} ({origin["segment"]} segment).']
     if threat.kind == 'misconfiguration':
@@ -208,7 +269,7 @@ def spread(threat: Threat, hosts: dict[str, dict], model: SoftwareModel) -> tupl
         here = hosts[hid]
         new = []
         for other, v in hosts.items():
-            if other in infected or not v['rack_online']:
+            if other in infected or not v['rack_online'] or other in failed:
                 continue
             same = v['segment'] == here['segment']
             if not same and not crosses:
@@ -233,15 +294,18 @@ TIER_ORDER = ['hypervisor', 'operating_system', 'identity', 'database', 'message
 def evaluate_software(model: SoftwareModel) -> dict:
     hosts = hosts_index(model.layout)
     infected: set[str] = set()
+    ransomware_hosts: set[str] = set()
     traces = []
     recovery_hours = 0.0
-    ransomware = False
     for t in model.threats:
         hit, trace = spread(t, hosts, model)
         infected |= hit
+        if t.kind == 'ransomware':
+            # Track the hosts ransomware actually reached. An unrelated virus or
+            # worm must never be reclassified as encryption/data loss.
+            ransomware_hosts |= hit
         traces.append({'kind': t.kind, 'origin': t.origin_host, 'infected': sorted(hit), 'trace': trace, 'description': THREAT_TEXT[t.kind]})
         recovery_hours = max(recovery_hours, THREAT_RECOVERY_HOURS[t.kind] * (2 if t.kind == 'ransomware' and not model.backups_available else 1))
-        ransomware |= t.kind == 'ransomware'
     host_states = []
     for h in hosts.values():
         reason = None
@@ -261,7 +325,7 @@ def evaluate_software(model: SoftwareModel) -> dict:
         for s in model.services:
             healthy = [h for h in s.hosts if h in online_hosts]
             missing = [h for h in s.hosts if h not in hosts]
-            data_lost = ransomware and s.stateful and any(h in infected for h in s.hosts) and not model.backups_available
+            data_lost = bool(ransomware_hosts) and s.stateful and any(h in ransomware_hosts for h in s.hosts) and not model.backups_available
             deps_down = [d for d in s.depends_on if d in states and not states[d]['up']]
             replicas_ok = len(healthy) >= s.min_replicas and not data_lost
             up = replicas_ok and not deps_down

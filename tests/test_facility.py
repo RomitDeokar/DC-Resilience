@@ -84,3 +84,63 @@ def test_unknown_dependency_rejected():
     d = _default()
     d['services'][0]['depends_on'] = ['nope']
     assert client.post('/api/software/evaluate', json=_model(d)).status_code == 422
+
+
+def _first_compute(d, exclude=()):
+    for r in d['layout']['racks']:
+        for h in r['devices']:
+            if h['kind'] == 'compute' and h['id'] not in exclude:
+                return h['id']
+    raise AssertionError('no compute host')
+
+
+def test_duplicate_device_ids_across_racks_rejected():
+    """F03: a device id is a global host identity; it must not collide across racks."""
+    d = _default()
+    d['layout']['racks'][1]['devices'][0]['id'] = d['layout']['racks'][0]['devices'][0]['id']
+    r = client.post('/api/racks/evaluate', json=d['layout'])
+    assert r.status_code == 422
+    assert 'unique across all racks' in r.text
+
+
+def test_duplicate_replica_hosts_rejected():
+    """F02: repeating one host must not manufacture two healthy replicas."""
+    d = _default()
+    d['services'][0]['hosts'] = [d['services'][0]['hosts'][0]] * 2
+    d['services'][0]['min_replicas'] = 2
+    r = client.post('/api/software/evaluate', json=_model(d))
+    assert r.status_code == 422
+    assert 'more than once' in r.text
+
+
+def test_offline_origin_cannot_propagate():
+    """F06: a powered-off origin cannot spread a network threat."""
+    d = _default()
+    origin = d['services'][0]['hosts'][0]
+    body = client.post('/api/software/evaluate', json=_model(
+        d, threats=[{'kind': 'worm', 'origin_host': origin, 'hops': 5}], failed_hosts=[origin])).json()
+    assert origin not in body['infected_hosts']
+    assert body['threats'][0]['infected'] == []
+    assert 'offline' in body['threats'][0]['trace'][0].lower()
+
+
+def test_ransomware_does_not_reclassify_unrelated_virus():
+    """F04: a virus on one host plus ransomware elsewhere is not data loss."""
+    d = _default()
+    idp = next(s for s in d['services'] if s['id'] == 'idp')
+    virus_host = idp['hosts'][0]
+    ransom_host = _first_compute(d, exclude=set(idp['hosts']))
+    body = client.post('/api/software/evaluate', json=_model(d, backups_available=False, threats=[
+        {'kind': 'virus', 'origin_host': virus_host, 'hops': 0},
+        {'kind': 'ransomware', 'origin_host': ransom_host, 'hops': 0}])).json()
+    idp_eval = next(s for s in body['services'] if s['id'] == 'idp')
+    assert idp_eval['up'] and 'data loss' not in idp_eval['reason']
+
+
+def test_dependency_cycle_rejected_with_path():
+    """F07: bottom-up resolution requires an acyclic dependency graph."""
+    d = _default()
+    d['services'][0]['depends_on'] = ['idp']
+    r = client.post('/api/software/evaluate', json=_model(d))
+    assert r.status_code == 422
+    assert 'cycle' in r.text.lower()

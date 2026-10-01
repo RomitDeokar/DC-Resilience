@@ -47,16 +47,32 @@ pip install -r requirements.txt
 npm ci && npm run build
 uvicorn backend.app:app --host 0.0.0.0 --port 8000      # serves API + built frontend
 # development: npm run dev (Vite proxy to :8000)
-python -m pytest tests -q
+```
+
+Tests (development dependencies in `requirements-dev.txt`):
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests -q          # 59 regression tests
+```
+
+Reproduce the study (writes `paper/results/`):
+
+```bash
+python paper/run_study.py
 ```
 
 Docker: `docker compose up --build` (single image, port 8000).
+
+## Licence
+
+MIT — see [LICENSE](LICENSE). Citation metadata in [CITATION.cff](CITATION.cff).
 
 ## Modelling notes
 
 - All engines are deterministic or seeded; no pre-computed reliability scores.
 - Rack planner checks power and U-space per rack. Airflow, weight and cabling are not modelled.
-- Software threats propagate hop-by-hop over hosts you place: worms cross segments only when segmentation is off, viruses are blocked by endpoint protection, patched hosts resist viruses/worms, ransomware on stateful services without backups becomes data loss. Recovery hours are editable planning assumptions.
+- Software threats propagate hop-by-hop over hosts you place: worms cross segments only when segmentation is off, viruses are blocked by endpoint protection, patched hosts resist viruses/worms, and ransomware on stateful services without backups becomes data loss. A powered-off or failed origin cannot propagate. Recovery hours are fixed planning constants (not user-editable in this build). Service dependency graphs must be acyclic; duplicate replica hosts and duplicate device IDs across racks are rejected.
 - Educational Tier notes only — no Tier certification claim. Failure rates are mixed-source assumptions (see Reference library).
 
 SRM IST · Romit Deokar & Shourya Saran

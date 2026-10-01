@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use this software or its study, please cite it as follows."
+title: "DC-Resilience: A Reproducible Monte Carlo Workbench for Data Centre Redundancy Architectures"
+authors:
+  - family-names: Deokar
+    given-names: Romit
+  - family-names: Saran
+    given-names: Shourya
+type: software
+license: MIT
+version: "1.0.0"
+date-released: "2026-10-01"
+abstract: >-
+  A FastAPI + React research console that evaluates N, N+1 and 2N data centre
+  redundancy architectures with a continuous-time renewal Monte Carlo engine,
+  paired random streams, exact outage-interval integration and Clopper-Pearson
+  uncertainty intervals.
+keywords:
+  - data centre
+  - reliability
+  - redundancy
+  - Monte Carlo
+  - availability

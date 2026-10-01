@@ -295,6 +295,16 @@ def test_maintenance_randomness_independent_of_surge_toggle():
         assert [e for e in x if e[3] == 'FORCED_FAILURE'] == [e for e in y if e[3] == 'FORCED_FAILURE']
 
 
+def test_failure_rate_stream_ids_are_explicit_and_frozen():
+    from backend.engine import STREAM_IDS, RATES
+    from backend.models import topology
+    # Reordering or inserting a row in failure_rates.json must not silently change
+    # seeded results, so every record carries an explicit, unique stream id.
+    assert all('stream' in r for r in RATES)
+    assert len(set(STREAM_IDS.values())) == len(STREAM_IDS)
+    assert {g['kind'] for g in topology(config('N+1'))} <= set(STREAM_IDS)
+
+
 def test_generator_audit_and_inactive_effective_rates():
     from backend.engine import rate_value
     c = config(n=100)
@@ -409,6 +419,9 @@ def test_operations_distribution_and_plant_cascades():
     from backend.operations import Design, Scenario, evaluate
     d = Design()
     assert evaluate(Scenario(design=d))['service_maintained']
+    # The default design is N+1 and has no single point of failure; degrade it to a
+    # single-point configuration to exercise the cascades.
+    d.ats_units = d.plant_units = 1
     for fault in ['ats-1', 'plant-1']:
         state = evaluate(Scenario(design=d, failed_components=[fault]))
         assert not state['service_maintained']
@@ -430,7 +443,13 @@ def test_operations_scenarios_and_sweep_match_applied_design():
         assert response.status_code == 200
     sweep = client.post('/api/operations/sweep', json=d).json()
     assert sweep['baseline_maintained']
-    # Default design: 2 utility, 2 gen, 1 ATS, 3 UPS, 2 PDU, 1 plant, 3 cooling, 2 ISP, 2 core, 4 dist.
+    # Default design (N+1): 2 utility, 2 gen, 2 ATS, 3 UPS, 2 PDU, 2 plant, 4 cooling, 2 ISP, 2 core, 4 dist.
+    assert sweep['tested'] == 25
+    # A consistent N+1 default must not contain a single unit that takes the site down.
+    assert sweep['vulnerabilities'] == 0
+    # Degrade to single-point equipment and confirm the sweep now finds them.
+    d.update(ats_units=1, plant_units=1, cooling_units=3)
+    sweep = client.post('/api/operations/sweep', json=d).json()
     assert sweep['tested'] == 22
     vulnerable = {r['component_id'] for r in sweep['results'] if not r['service_maintained']}
     assert {'ats-1', 'plant-1', 'cooling-1'} <= vulnerable
@@ -453,7 +472,33 @@ def test_operations_validation_autonomy_and_websocket():
     assert early['service_maintained'] and early['source'] == 'Generator'
     assert not late['service_maintained'] and late['cooling_kw'] == 0
     with client.websocket_connect('/ws/telemetry') as ws:
-        ws.send_json({'design':d, 'failed_components':['plant-1']})
+        ws.send_json({'design':d, 'failed_components':['plant-1', 'plant-2']})
         sample = ws.receive_json()
         assert sample['synthetic'] and sample['state'] == 'CRITICAL'
         assert 'thermal' in [a['id'] for a in sample['alerts']]
+
+
+def test_hazard_grid_endpoint_is_a_small_architecture_hazard_sweep():
+    from backend.models import Facility
+    c = Facility(simulation={'num_trials': 200, 'seed': 7})
+    r = client.post('/api/hazard-grid', json=c.model_dump())
+    assert r.status_code == 200
+    body = r.json()
+    assert body['multipliers'] == [1, 5, 20]
+    assert [row['architecture'] for row in body['rows']] == ['N', 'N+1', '2N']
+    assert all(len(row['cells']) == 3 for row in body['rows'])
+    # 20x hazard must not reduce downtime relative to 1x.
+    for row in body['rows']:
+        assert row['cells'][2]['annual_downtime_minutes'] >= row['cells'][0]['annual_downtime_minutes']
+
+
+def test_cross_tie_is_opt_in_and_pools_power_across_trains():
+    from backend.models import Facility, topology, capacity_state
+    failed = {'UPS-A01', 'UPS-A02', 'UPS-B01', 'UPS-B02'}
+    indep = Facility(power={'redundancy': '2N', 'cross_tie': False})
+    tied = Facility(power={'redundancy': '2N', 'cross_tie': True})
+    assert not capacity_state(indep, topology(indep), failed)['service_maintained']
+    assert capacity_state(tied, topology(tied), failed)['service_maintained']
+    # Default stays off, so N+1 behaviour is unchanged by the new flag.
+    n = Facility(power={'redundancy': 'N+1'})
+    assert capacity_state(n, topology(n), {'UPS-A01'})['service_maintained']

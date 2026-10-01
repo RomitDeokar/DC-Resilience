@@ -7,7 +7,8 @@
     "status": "secondary-source",
     "source": "M. Wiboonrat (2020), Condition-Based Maintenance for Data Center Operations Management, Table 2, E39-200; explicitly reproduces IEEE 493 data.",
     "source_url": "https://www.intechopen.com/chapters/73642",
-    "notes": "Published rounded annual rate. Source equipment: small computer-room UPS. Applying to larger modular equipment is a modelling extrapolation."
+    "notes": "Published rounded annual rate. Source equipment: small computer-room UPS. Applying to larger modular equipment is a modelling extrapolation.",
+    "stream": 0
   },
   {
     "component": "GENERATOR",
@@ -17,7 +18,14 @@
     "status": "secondary-source",
     "source": "M. Wiboonrat (2020), Table 2, E18-121; IEEE 493 continuous-duty packaged diesel generator.",
     "source_url": "https://www.intechopen.com/chapters/73642",
-    "notes": "Published rate 0.58/year used verbatim (source failure counts and exposure are internally inconsistent). Continuous-duty, 250 kW\u20131.5 MW class; extrapolation at larger sizes. Not a failure-to-start probability. Audit: 115 / 266 = 0.432330827 per year, versus printed 0.58; 8760 / 15033.8 = 0.582687. Neither alternative is independently validated. Compare both in sensitivity analysis."
+    "notes": "Published rate 0.58/year used verbatim (source failure counts and exposure are internally inconsistent). Continuous-duty, 250 kW–1.5 MW class; extrapolation at larger sizes. Not a failure-to-start probability. Audit: 115 / 266 = 0.432330827 per year, versus printed 0.58; 8760 / 15033.8 = 0.582687. Neither alternative is independently validated. Compare both in sensitivity analysis.",
+    "stream": 1,
+    "alternative_rate": {
+      "label": "115 failures / 266 unit-years",
+      "failures": 115,
+      "exposure_unit_years": 266,
+      "value": 0.4323308270676692
+    }
   },
   {
     "component": "PDU",
@@ -27,7 +35,8 @@
     "status": "illustrative",
     "source": "User-supplied project README, section 6: midpoint of illustrative ranges. NOT verified IEEE 493 data.",
     "source_url": null,
-    "notes": "Demo assumption. Replace with equipment-specific, cited evidence before publishing research results. Source audit 2026-09-12: Wiboonrat Table 2 contains neither PDU nor CRAC rate entries; a switchgear rate is not a valid substitute."
+    "notes": "Demo assumption. Replace with equipment-specific, cited evidence before publishing research results. Source audit 2026-09-12: Wiboonrat Table 2 contains neither PDU nor CRAC rate entries; a switchgear rate is not a valid substitute.",
+    "stream": 2
   },
   {
     "component": "CRAC",
@@ -37,7 +46,8 @@
     "status": "illustrative",
     "source": "User-supplied project README, section 6: midpoint of illustrative ranges. NOT verified IEEE 493 data.",
     "source_url": null,
-    "notes": "Demo assumption. No thermal inertia or temperature transient model; cooling capacity is expressed as supported IT kW. Source audit 2026-09-12: Wiboonrat Table 2 contains neither PDU nor CRAC rate entries; a switchgear rate is not a valid substitute."
+    "notes": "Demo assumption. No thermal inertia or temperature transient model; cooling capacity is expressed as supported IT kW. Source audit 2026-09-12: Wiboonrat Table 2 contains neither PDU nor CRAC rate entries; a switchgear rate is not a valid substitute.",
+    "stream": 3
   },
   {
     "component": "ATS",
@@ -47,7 +57,8 @@
     "status": "secondary-source",
     "source": "M. Wiboonrat (2020), Table 2, E34-110; IEEE 493 automatic transfer switch >600 A.",
     "source_url": "https://www.intechopen.com/chapters/73642",
-    "notes": "Published rounded annual rate and mean repair duration. Ideal switching assumed; switching delay not modelled."
+    "notes": "Published rounded annual rate and mean repair duration. Ideal switching assumed; switching delay not modelled.",
+    "stream": 4
   },
   {
     "component": "SERVER",
@@ -57,7 +68,8 @@
     "status": "illustrative",
     "source": "Explicit educational scenario assumption, introduced in engine v2. NOT IEEE 493 or field-measured data.",
     "source_url": null,
-    "notes": "Representative compute nodes with equal workload shares; not a full inventory or electrical sizing model."
+    "notes": "Representative compute nodes with equal workload shares; not a full inventory or electrical sizing model.",
+    "stream": 5
   },
   {
     "component": "OS",
@@ -67,7 +79,8 @@
     "status": "illustrative",
     "source": "Explicit educational scenario assumption, introduced in engine v2. NOT IEEE 493 or field-measured data.",
     "source_url": null,
-    "notes": "Per-server software restart process on the SAME server ID; overlapping hardware/software repairs never restore a still-failed host."
+    "notes": "Per-server software restart process on the SAME server ID; overlapping hardware/software repairs never restore a still-failed host.",
+    "stream": 6
   },
   {
     "component": "NETWORK",
@@ -77,7 +90,8 @@
     "status": "illustrative",
     "source": "Explicit educational scenario assumption, introduced in engine v2. NOT IEEE 493 or field-measured data.",
     "source_url": null,
-    "notes": "Abstract connectivity service; no packet routing, link graph or Spine-Leaf implementation."
+    "notes": "Abstract connectivity service; no packet routing, link graph or Spine-Leaf implementation.",
+    "stream": 7
   },
   {
     "component": "STORAGE",
@@ -87,7 +101,8 @@
     "status": "illustrative",
     "source": "Explicit educational scenario assumption, introduced in engine v2. NOT IEEE 493 or field-measured data.",
     "source_url": null,
-    "notes": "Abstract replicated storage availability; no data-loss, quorum, disk rebuild or consistency model."
+    "notes": "Abstract replicated storage availability; no data-loss, quorum, disk rebuild or consistency model.",
+    "stream": 8
   },
   {
     "component": "APPLICATION",
@@ -97,6 +112,7 @@
     "status": "illustrative",
     "source": "Explicit educational scenario assumption, introduced in engine v2. NOT IEEE 493 or field-measured data.",
     "source_url": null,
-    "notes": "Abstract application restart; no request latency, deployment rollout or VM placement model."
+    "notes": "Abstract application restart; no request latency, deployment rollout or VM placement model.",
+    "stream": 9
   }
 ]
