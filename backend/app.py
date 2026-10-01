@@ -8,6 +8,7 @@ import time
 import uuid
 from uuid import UUID
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from .operations import router as operations_router
@@ -16,6 +17,8 @@ from .models import Facility, Injection, topology, capacity_state, work_estimate
 from .engine import simulate, RATES, MODEL_NOTES, paired_comparison, diagnostics, DATASET_VERSION, ENGINE_VERSION
 
 app = FastAPI(title='DC-Resilience API', version=ENGINE_VERSION, description='Reproducible Monte Carlo data centre redundancy experiments. No paid APIs.')
+# Compress large JSON (a 20k-trial comparison is several MB) at the transport layer.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 # Register operations before the SPA catch-all so GET and WebSocket routes resolve.
 app.include_router(operations_router)
 app.include_router(facility_router)
@@ -119,6 +122,33 @@ def run_simulation(config: Facility, job_id: UUID | None = None):
 @app.post('/api/compare')
 def run_comparison(config: Facility, job_id: UUID | None = None):
     return experiment(config, True, job_id)
+
+@app.post('/api/hazard-grid')
+def hazard_grid(config: Facility):
+    """Small architecture x hazard grid (paper Table VI style). Runs 3x3 short
+    experiments on demand; it is a screening view, not a full trial budget."""
+    if not slots.acquire(blocking=False):
+        raise HTTPException(429, 'A simulation is already running. Retry after it finishes.', headers={'Retry-After': '5'})
+    try:
+        multipliers = [1, 5, 20]
+        trials = min(config.simulation.num_trials, 1000)
+        rows = []
+        for arch in ['N', 'N+1', '2N']:
+            cells = []
+            for m in multipliers:
+                variant = config.model_copy(deep=True)
+                variant.power.redundancy = variant.cooling.redundancy = variant.it.redundancy = arch
+                variant.simulation.num_trials = trials
+                variant.simulation.stress_multiplier = m
+                variant.simulation.diagnostics = False
+                result = simulate(variant)
+                cells.append({'multiplier': m, 'annual_downtime_minutes': result['expected_annual_downtime_minutes'],
+                              'availability_percent': result['availability_percent'], 'outage_trials': result['outage_trials']})
+            rows.append({'architecture': arch, 'cells': cells})
+        budget = (1 - {'I': 99.671, 'II': 99.741, 'III': 99.982, 'IV': 99.995}.get(config.tier_target, 99.982) / 100) * 525600
+        return {'trials_per_cell': trials, 'multipliers': multipliers, 'rows': rows, 'sla_budget_minutes': budget}
+    finally:
+        slots.release()
 
 DIST = Path(__file__).resolve().parent.parent / 'dist'
 if DIST.exists():

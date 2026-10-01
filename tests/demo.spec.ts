@@ -148,7 +148,8 @@ test('completed-trial counters show real diagnostic work and clean up after comp
   expect(state.completed_trials).toBeGreaterThan(0)
   expect(state.completed_trials).toBeLessThanOrEqual(state.total_trials)
   await expect(page.getByRole('progressbar',{name:'Completed trial evaluations'})).toBeVisible()
-  await expect(page.getByRole('heading',{name:'Simulation results',exact:true})).toBeVisible()
+  // Diagnostics reruns are the heaviest preset (~24k evaluations); allow time.
+  await expect(page.getByRole('heading',{name:'Simulation results',exact:true})).toBeVisible({timeout:30000})
   await expect(page.getByRole('progressbar',{name:'Completed trial evaluations'})).toHaveCount(0)
 })
 

@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { LineChart, Line, ComposedChart, Area, BarChart, Bar, Cell, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, LabelList, ErrorBar } from 'recharts'
 import { Activity, ArrowDownRight, ArrowRight, Check, CheckCircle2, Clock3, Download, Info, ShieldCheck, TriangleAlert, TrendingUp, Play, Pause, SkipBack, ChevronLeft, ChevronRight } from 'lucide-react'
-import { availability, number, inr, type Result, type Run } from './types'
+import { availability, number, inr, type Result, type Run, type TracePoint } from './types'
 import { exportRun } from './exports'
+import { api } from './api'
 import { FacilityDiagram } from './Visualizer'
 const COLORS = ['#8191aa', '#ec7848', '#23947d']
 const tipStyle = {background:'#fff',border:'1px solid #e5e8ef',borderRadius:9,fontSize:12,boxShadow:'0 6px 24px #17233212'}
@@ -44,8 +45,16 @@ export function ResultsDashboard({run, onCompare}: {run: Run; onCompare: ()=>voi
     <div className="inline-note"><Info size={14}/><span>Mixed-source research demo · {run.config.simulation.operating_mode} scenario · {run.config.simulation.stress_multiplier}× hazard rate. Estimates are model-dependent, not Tier certification.</span></div>
   </>
 }
+interface HazardGrid { trials_per_cell: number; multipliers: number[]; sla_budget_minutes: number; rows: { architecture: string; cells: { multiplier: number; annual_downtime_minutes: number; availability_percent: number; outage_trials: number }[] }[] }
 export function Comparison({run}: {run: Run}) {
   const rs = run.results
+  const [grid,setGrid]=useState<HazardGrid|null>(null)
+  const [gridBusy,setGridBusy]=useState(false)
+  const [gridError,setGridError]=useState('')
+  const loadGrid=async()=>{setGridBusy(true);setGridError('');try{setGrid(await api<HazardGrid>('hazard-grid',run.config))}catch(e){setGridError(e instanceof Error?e.message:String(e))}finally{setGridBusy(false)}}
+  const budget=grid?.sla_budget_minutes??94.6
+  const heatColor=(m:number)=> m<=budget?'#e9f6ef': m<=budget*10?'#fdf3e2': m<=budget*100?'#fbe4dc':'#f9dcdc'
+  const heatText=(m:number)=> m<=budget?'#26876d': m<=budget*10?'#8a6320':'#b0413f'
   const min = Math.min(...rs.map(r=>r.availability_percent))
   const nDown = rs[0].expected_annual_downtime_minutes
   const best = [...rs].filter(r=>r.evidence_status==='above').sort((a,b)=>a.infra_cost_index-b.infra_cost_index)[0]
@@ -58,6 +67,7 @@ export function Comparison({run}: {run: Run}) {
     <div className="charts-grid equal"><section className="panel"><div className="chart-heading"><div><h3>Availability by architecture</h3><p>Percent uptime · zoomed vertical axis</p></div></div><div className="comparison-chart"><ResponsiveContainer width="100%" height="100%"><BarChart data={rs} margin={{left:10,right:20,top:25,bottom:5}}><CartesianGrid vertical={false} strokeDasharray="3 4" stroke="#e9edf2"/><XAxis dataKey="redundancy" tickLine={false} axisLine={false} tick={{fontSize:12}}/><YAxis domain={[Math.max(0,Math.floor((min-.01)*100)/100),100]} tickFormatter={v=>`${v.toFixed(2)}%`} tick={{fontSize:10}} width={65} axisLine={false} tickLine={false}/><Tooltip formatter={v=>[`${Number(v).toFixed(6)}%`,'Availability']} contentStyle={tipStyle}/><ReferenceLine y={rs[0].sla_target_percent} stroke="#8892a1" strokeDasharray="4 4"/><Bar dataKey="availability_percent" radius={[5,5,0,0]} maxBarSize={65}>{rs.map((_,i)=><Cell key={i} fill={COLORS[i]}/>)}</Bar></BarChart></ResponsiveContainer></div></section><section className="panel"><div className="chart-heading"><div><h3>The downtime trade-off</h3><p>Expected minutes of downtime per year · log scale with 95% interval</p></div></div><div className="comparison-chart"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={downtimeData} margin={{left:10,right:30,top:25,bottom:5}}><CartesianGrid vertical={false} strokeDasharray="3 4" stroke="#e9edf2"/><XAxis dataKey="redundancy" tickLine={false} axisLine={false} tick={{fontSize:12}}/><YAxis scale="log" domain={[0.5,'auto']} allowDataOverflow tick={{fontSize:10}} width={52} axisLine={false} tickLine={false} tickFormatter={v=>v>=60?`${number(Number(v)/60,0)} h`:number(Number(v),Number(v)<10?1:0)}/><Tooltip formatter={(v,n)=>[`${number(Number(v),2)} min`,'Annual downtime']} contentStyle={tipStyle}/><Bar dataKey="downtime" radius={[5,5,0,0]} maxBarSize={65}>{downtimeData.map((_,i)=><Cell key={i} fill={COLORS[i]}/>)}<ErrorBar dataKey="downtimeCi" width={5} strokeWidth={2} stroke="#3f4c5e"/></Bar></ComposedChart></ResponsiveContainer></div></section></div>
     <section className="panel"><div className="chart-heading"><div><h3>Experiment results</h3><p>Identical load, component ratings, horizon, and hazard assumptions.</p></div><button className="text-button" onClick={()=>exportRun(run,'csv')}><Download size={14}/>Export CSV</button></div><div className="table-scroll"><table><thead><tr><th>Architecture</th><th>Availability (95% interval)</th><th>Downtime / year</th><th>SLA breaches</th><th>Cost index</th><th>Overlapping trials</th></tr></thead><tbody>{rs.map(r=><tr key={r.redundancy}><td><b>{r.redundancy}</b></td><td>{availability(r.availability_percent)}%<small className="table-sub">{r.availability_ci95.map(x=>x.toFixed(5)).join(' – ')}%</small><small className="table-sub">{r.availability_ci_method==='conservative-outage-risk-bound'?'Conservative bound':'Approximate mean CI'} · {r.outage_trials<30?'limited outage evidence':'sample-based'}</small></td><td>{number(r.expected_annual_downtime_minutes,3)} min</td><td>{number(r.sla_breach_rate_percent,2)}%<small className="table-sub">{number(r.sla_breaches)} trials</small></td><td>{number(r.infra_cost_index,2)}×</td><td>{number(r.overlap_trials)}</td></tr>)}</tbody></table></div></section>
     {!!run.paired_comparisons?.length&&<section className="panel paired-panel"><div className="chart-heading"><div><h3>Is the difference supported by the sample?</h3><p>Paired trial differences using shared component streams. Positive values mean less downtime.</p></div></div><div className="table-scroll"><table><thead><tr><th>Change in design</th><th>Minutes saved / year</th><th>Approx. paired 95% CI</th><th>Interpretation</th></tr></thead><tbody>{run.paired_comparisons.map(p=><tr key={`${p.baseline}-${p.alternative}`}><td><b>{p.baseline} → {p.alternative}</b></td><td>{number(p.downtime_reduction_minutes,3)}</td><td>{p.ci95.map(v=>number(v,3)).join(' to ')}</td><td>{p.evidence_limited?'Too few differing trials':p.ci95[0]>0?'Reduction supported':p.ci95[1]<0?'Increase supported':'Difference unresolved'}</td></tr>)}</tbody></table></div><div className="inline-note"><Info size={14}/><span>Normal intervals are approximate and do not capture uncertain input rates or omitted failure mechanisms. A point estimate is not a procurement recommendation.</span></div></section>}
+    <section className="panel"><div className="chart-heading"><div><h3>Severity across hazards</h3><p>Annual downtime per architecture at 1×, 5× and 20× hazard. A screening grid (paper Table VI style), not a full trial budget{grid?` · ${number(grid.trials_per_cell)} trials/cell`:''}.</p></div><button className="text-button" onClick={loadGrid} disabled={gridBusy}>{gridBusy?'Running grid…':'Run hazard grid'}</button></div>{gridError&&<p className="validation-message" role="alert">{gridError}</p>}{grid&&<><div className="heatmap"><div className="heat-row heat-head"><span className="heat-arch"/> {grid.multipliers.map(m=><b key={m}>{m}× hazard</b>)}</div>{grid.rows.map(row=><div className="heat-row" key={row.architecture}><span className="heat-arch">{row.architecture}</span>{row.cells.map(c=><div key={c.multiplier} className="heat-cell" style={{background:heatColor(c.annual_downtime_minutes),color:heatText(c.annual_downtime_minutes)}} title={`${row.architecture} @ ${c.multiplier}×: ${number(c.annual_downtime_minutes,2)} min/yr · ${c.outage_trials} outage trials`}>{number(c.annual_downtime_minutes,1)}<small>min</small></div>)}</div>)}</div><div className="heat-legend"><span><i style={{background:'#e9f6ef'}}/>within SLA budget ({number(budget,0)} min)</span><span><i style={{background:'#fdf3e2'}}/>up to 10×</span><span><i style={{background:'#fbe4dc'}}/>10–100×</span><span><i style={{background:'#f9dcdc'}}/>over 100×</span></div></>}</section>
     <DiagnosticResults run={run}/>
     <div className="result-insight"><div className="insight-icon"><ArrowDownRight size={21}/></div><div><strong>{best?`${best.redundancy} is the lowest unit-count design with a sampled mean interval above the benchmark.`:'No design has sufficient sampled evidence to place its mean interval above the benchmark.'}</strong><p>{nDown>0?`N+1 changes expected downtime by ${number((1-rs[1].expected_annual_downtime_minutes/nDown)*100,2)}% relative to N. `:''}The count index uses equal weights; INR budgets are editable assumptions, not vendor quotes. Rare-event rankings can vary by seed.</p></div></div><div className="inline-note"><Info size={15}/><span>Zero observed downtime is not infinite reliability. This {run.config.simulation.stress_multiplier}× {run.config.simulation.operating_mode} experiment uses illustrative PDU/cooling/IT values. Download JSON for complete assumptions and data provenance.</span></div>
   </div>
@@ -85,6 +95,33 @@ function usePrefersReducedMotion() {
     return()=>media.removeEventListener?.('change',update)
   },[])
   return reduced
+}
+
+// Paper Fig. 3 style swim-lane: failure intervals per component plus a shaded
+// service-deficit band, so overlapping outages are visible at a glance.
+function YearTimeline({trace,horizon,index,onSeek}:{trace:TracePoint[];horizon:number;index:number;onSeek:(i:number)=>void}) {
+  const rows = useMemo(()=>{
+    const active: Record<string,{count:number;start:number}> = {}
+    const byComp: Record<string,{s:number;e:number}[]> = {}
+    for(const p of trace){
+      if(!p.component) continue
+      if(p.action==='failure'){ const a=active[p.component]??(active[p.component]={count:0,start:p.time_hours}); if(a.count===0)a.start=p.time_hours; a.count++ }
+      else if(p.action==='repair'){ const a=active[p.component]; if(a&&a.count>0){ a.count--; if(a.count===0)(byComp[p.component]||=[]).push({s:a.start,e:p.time_hours}) } }
+    }
+    for(const [k,a] of Object.entries(active)) if(a.count>0)(byComp[k]||=[]).push({s:a.start,e:horizon})
+    return Object.entries(byComp).sort((a,b)=>a[0].localeCompare(b[0]))
+  },[trace,horizon])
+  const deficit = trace.map((p,i)=>({s:p.time_hours,e:trace[i+1]?.time_hours??horizon,down:!p.service_maintained})).filter(x=>x.down)
+  const pct=(t:number)=>Math.max(0,Math.min(100,t/Math.max(1,horizon)*100))
+  const cursor=trace[Math.min(index,trace.length-1)]?.time_hours??0
+  return <div className="year-timeline">
+    <div className="yt-caption"><span className="small-tag">Year timeline</span><span className="subtle">One row per failing component · red band is the service deficit · click a bar to jump</span></div>
+    <div className="yt-rows">
+      <div className="yt-row"><span className="yt-label">Service</span><div className="yt-track yt-band">{deficit.map((x,i)=><i key={i} className="yt-deficit" style={{left:`${pct(x.s)}%`,width:`${Math.max(0.4,pct(x.e)-pct(x.s))}%`}} title={`Interrupted ${number(x.s,1)}–${number(x.e,1)} h`}/>)}<i className="yt-cursor" style={{left:`${pct(cursor)}%`}}/></div></div>
+      {rows.map(([cid,ivs])=><div className="yt-row" key={cid}><span className="yt-label mono" title={cid}>{cid}</span><div className="yt-track">{ivs.map((iv,i)=><i key={i} className="yt-fail" title={`${cid}: ${number(iv.s,1)}–${number(iv.e,1)} h`} onClick={()=>onSeek(Math.max(0,trace.findIndex(p=>p.time_hours>=iv.s)))} style={{left:`${pct(iv.s)}%`,width:`${Math.max(0.4,pct(iv.e)-pct(iv.s))}%`}}/>)}<i className="yt-cursor" style={{left:`${pct(cursor)}%`}}/></div></div>)}
+    </div>
+    <div className="yt-axis"><span>0 h</span><span>{number(horizon)} h</span></div>
+  </div>
 }
 
 function TrialReplay({run,result:r}: {run:Run;result:Result}) {
@@ -115,6 +152,7 @@ function TrialReplay({run,result:r}: {run:Run;result:Result}) {
     <div className="panel replay-panel"><div className="chart-heading"><div><h3>Inside an actual simulated trial</h3><p>Trial #{r.worst_trial.trial_id} · highest observed downtime, not a typical year</p></div><span className="small-tag">{number(r.worst_trial.downtime_minutes,2)} min lost over {run.config.simulation.simulated_years_per_trial} year(s)</span></div>
       <div className="replay-chart"><ResponsiveContainer width="100%" height="100%"><LineChart data={trace} margin={{left:10,right:25,top:15,bottom:10}}><CartesianGrid vertical={false} strokeDasharray="3 4"/><XAxis dataKey="time_hours" type="number" domain={[0,r.worst_trial.horizon_hours]} tick={{fontSize:10}} tickFormatter={v=>`${number(v)} h`}/><YAxis domain={[0,run.config.it_load_kw*1.05]} tick={{fontSize:10}} width={64} tickFormatter={v=>`${number(v/1000,1)} MW`}/><Tooltip contentStyle={tipStyle} labelFormatter={v=>`Hour ${number(Number(v),3)}`} formatter={v=>[`${number(Number(v))} kW`,'Served IT load']}/><ReferenceLine y={run.config.it_load_kw} stroke="#8996a8" strokeDasharray="4 3"/><ReferenceLine x={point.time_hours} stroke="#ed7848" strokeWidth={2}/><Line type="stepAfter" dataKey="served_it_kw" stroke="#23947d" dot={false} strokeWidth={2} isAnimationActive={false}/></LineChart></ResponsiveContainer></div>
       <div className="replay-controls"><button className="button" aria-label="Restart trial replay" onClick={()=>select(0)}><SkipBack size={15}/></button><button className="button" aria-label="Previous replay event" disabled={index===0} onClick={()=>select(index-1)}><ChevronLeft size={15}/></button><button className="button primary" onClick={()=>{if(index===trace.length-1)setIndex(0);setPlaying(!playing)}}>{playing?<Pause size={15}/>:<Play size={15}/>} {playing?'Pause':'Play'} replay</button><button className="button" aria-label="Next replay event" disabled={index===trace.length-1} onClick={()=>select(index+1)}><ChevronRight size={15}/></button><button className="button" disabled={firstOutage<0} onClick={()=>select(firstOutage)}>Jump to first outage</button><div className="replay-speed" role="group" aria-label="Playback speed">{[1,4,16].map(s=><button key={s} type="button" className={`button${speed===s?' primary':''}`} aria-pressed={speed===s} onClick={()=>setSpeed(s)}>{s}×</button>)}</div><span>Event {index+1} / {trace.length} · time-proportional{reduced?' · reduced motion':` · ${speed}×`}</span></div>
+      <YearTimeline trace={trace} horizon={r.worst_trial!.horizon_hours} index={index} onSeek={select}/>
       <div className="replay-scrubber"><input aria-label="Replay event position" type="range" min={0} max={trace.length-1} step={1} value={index} onChange={e=>select(Number(e.target.value))}/></div>
       <div className={`replay-event ${point.service_maintained?'':'interrupted'}`} aria-live="polite"><span className="mono">HOUR {number(point.time_hours,3)}</span><strong>{point.action==='start'?'All equipment healthy':point.action==='end'?'End of trial':`${point.component} ${point.action==='repair'?'cause cleared':'cause started'}`}</strong><span>{point.failed_components.length} active failures · {point.service_maintained?'Service protected':'Service interrupted'}</span></div>
     </div>

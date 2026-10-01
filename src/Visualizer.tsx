@@ -7,11 +7,14 @@ export function FacilityDiagram({state, config, failed = [], onToggle, compact =
   const lanes = [{id:'power',label:'Electrical',note:config.simulation.operating_mode==='islanded'?'Generator supply':'Ideal utility supply',kinds:['GENERATOR','ATS','UPS_MODULE','PDU']},{id:'cooling',label:'Mechanical',note:'Usable cooling capacity',kinds:['CRAC']},{id:'it',label:'IT services',note:'Representative workload',kinds:['SERVER','NETWORK','STORAGE','APPLICATION']}]
   return <section className={`facility-diagram single-line ${compact?'compact':''}`}>
     <div className="diagram-heading"><div><span className="eyebrow">DEPENDENCY SCHEMATIC</span><h3>{config.facility_name || 'Untitled facility'} <span className="dark-chip">SLA benchmark {config.tier_target}</span></h3></div><span className={`live-status ${state && !state.service_maintained?'failed':''}`}><i/>{state ? state.service_maintained?'Service maintained':'Capacity degraded':unavailable?'Invalid configuration':'Loading topology'}</span></div>
-    {state?<div className="schematic-lanes">{lanes.map(lane=>{
-      const groups=lane.kinds.map(k=>state.groups.find(g=>g.kind===k)).filter((g):g is Group=>!!g)
-      if(!groups.length)return null
-      return <div className="schematic-lane" key={lane.id}><div className="lane-label"><strong>{lane.label}</strong><small>{lane.note}</small></div><div className="lane-stages">{groups.map(group=><Equipment key={group.kind} group={group} failed={failed} onToggle={onToggle} compact={compact} disabled={disabled}/>)}</div></div>
-    })}<div className={`schematic-output ${!state.service_maintained?'degraded':''}`}><Server size={20}/><span>Delivered IT workload</span><strong>{number(Math.min(state.surviving_capacity_kw, config.it_load_kw))} <small>/ {number(config.it_load_kw)} kW</small></strong>{state.service_maintained?<Check size={17}/>:<Activity size={17}/>}</div></div>:<div className="diagram-loading">{!unavailable&&<LoaderCircle className="spin"/>}{unavailable?'Fix the configuration to preview equipment':'Preparing facility topology'}</div>}
+    {state?(hasTwoTrains(state)
+      ? <TrainSchematic state={state} config={config} failed={failed} onToggle={onToggle} disabled={disabled}/>
+      : <div className="schematic-lanes">{lanes.map(lane=>{
+        const groups=lane.kinds.map(k=>state.groups.find(g=>g.kind===k)).filter((g):g is Group=>!!g)
+        if(!groups.length)return null
+        return <div className="schematic-lane" key={lane.id}><div className="lane-label"><strong>{lane.label}</strong><small>{lane.note}</small></div><div className="lane-stages">{groups.map(group=><Equipment key={group.kind} group={group} failed={failed} onToggle={onToggle} compact={compact} disabled={disabled}/>)}</div></div>
+      })}<div className={`schematic-output ${!state.service_maintained?'degraded':''}`}><Server size={20}/><span>Delivered IT workload</span><strong>{number(Math.min(state.surviving_capacity_kw, config.it_load_kw))} <small>/ {number(config.it_load_kw)} kW</small></strong>{state.service_maintained?<Check size={17}/>:<Activity size={17}/>}</div></div>
+      ):<div className="diagram-loading">{!unavailable&&<LoaderCircle className="spin"/>}{unavailable?'Fix the configuration to preview equipment':'Preparing facility topology'}</div>}
     <div className="diagram-footer"><span><i className="legend-dot green"/>Operational{onToggle&&<><i className="legend-dot red"/>Failed</>}<i className="legend-dot outlined"/>{count} components</span><span>{onToggle?'Select a numbered unit to fail or repair':'Grouped dependencies · not physical wiring'}</span></div>
   </section>
 }
@@ -19,6 +22,40 @@ function Equipment({group, failed, onToggle, compact, disabled}: {group: Group; 
   const Icon=icons[group.kind]||Zap
   const broken=group.components.some(c=>failed.includes(c.id))
   return <div className={`line-stage ${broken?'has-failure':''}`}><div className="stage-symbol"><Icon size={22}/></div><h4>{labels[group.kind]||group.kind}</h4><p>{group.components.length} units <span>· {group.redundancy}</span></p>{!compact&&<div className="stage-units">{group.components.map(c=><button key={c.id} disabled={!onToggle||disabled} aria-label={`${failed.includes(c.id)?'Repair':'Fail'} ${c.id}`} title={`${c.id} · ${number(c.capacity_kw)} kW`} onClick={()=>onToggle?.(c.id)} className={failed.includes(c.id)?'unit-failed':''}>{c.id.replace(/^[^-]+-/, '')}</button>)}</div>}<small>{number(group.capacity_kw_each,1)} {group.subsystem==='it'?'workload-kW':'kW'} / unit</small></div>
+}
+function hasTwoTrains(state: FacilityState): boolean {
+  return state.groups.some(g=>g.components.some(c=>c.bank==='B'))
+}
+// A/B train view: 2N's key idea is two complete, independent paths. Drawing them
+// as parallel columns (never pooled boxes) makes the no-cross-tie rule visible.
+function TrainSchematic({state, config, failed, onToggle, disabled}: {state: FacilityState; config: Config; failed: string[]; onToggle?: (id:string)=>void; disabled: boolean}) {
+  const demand = config.it_load_kw || 1
+  const served = Math.min(state.surviving_capacity_kw, demand)
+  const unmet = Math.max(0, demand - served)
+  const limiting = [...state.groups].sort((a,b)=>(a.surviving_capacity_kw??0)-(b.surviving_capacity_kw??0))[0]
+  const powerKinds = ['GENERATOR','ATS','UPS_MODULE','PDU']
+  const itKinds = ['SERVER','NETWORK','STORAGE','APPLICATION']
+  const unitButton = (u: {id:string; capacity_kw:number}) => <button key={u.id} type="button" disabled={!onToggle||disabled} aria-label={`${failed.includes(u.id)?'Repair':'Fail'} ${u.id}`} title={`${u.id} · ${number(u.capacity_kw)} kW`} onClick={()=>onToggle?.(u.id)} className={failed.includes(u.id)?'unit-failed':''}>{u.id.replace(/^[^-]+-/,'')}</button>
+  return <div className="train-view">
+    <div className="train-grid">{(['A','B'] as const).map(bank=>{
+      const stages = powerKinds.map(k=>state.groups.find(g=>g.kind===k)).filter((g):g is Group=>!!g)
+        .map(g=>({group:g, units:g.components.filter(c=>c.bank===bank)})).filter(s=>s.units.length)
+      const cooling = state.groups.find(g=>g.kind==='CRAC')?.components.filter(c=>c.bank===bank)??[]
+      const itUnits = state.groups.filter(g=>itKinds.includes(g.kind)).flatMap(g=>g.components.filter(c=>c.bank===bank))
+      const complete = stages.every(s=>s.units.some(u=>!failed.includes(u.id))) && (config.cooling.redundancy!=='2N'||cooling.some(u=>!failed.includes(u.id)))
+      return <div className={`train-column ${complete?'ok':'down'}`} key={bank}>
+        <div className="train-header"><strong>Train {bank}</strong><span className={`train-status ${complete?'ok':'down'}`}>{complete?'Complete':'Incomplete'}</span></div>
+        <div className="train-chain">{stages.map(({group,units})=><div className="train-stage" key={group.kind}><span className="train-stage-label">{labels[group.kind]||group.kind}</span><div className="train-units">{units.map(unitButton)}</div></div>)}</div>
+        {!!cooling.length&&<div className="train-stage"><span className="train-stage-label">{labels.CRAC}</span><div className="train-units">{cooling.map(unitButton)}</div></div>}
+        {!!itUnits.length&&<div className="train-stage train-it"><span className="train-stage-label">IT services</span><div className="train-units">{itUnits.map(unitButton)}</div></div>}
+      </div>
+    })}</div>
+    <div className={`train-load ${state.service_maintained?'':'degraded'}`}>
+      <div className="train-load-nums"><span>Demand <b>{number(demand)} kW</b></span><span>Served <b>{number(served)} kW</b></span><span>Unmet <b className={unmet?'text-red':'text-green'}>{number(unmet)} kW</b></span><span>Limiting group <b>{labels[limiting?.kind]||limiting?.kind||'—'}</b></span></div>
+      <div className="load-bar"><i style={{width:`${Math.min(100,served/demand*100)}%`,background:state.service_maintained?'var(--green)':'var(--red)'}}/></div>
+      <small>No cross-ties: each train must be complete on its own; capacity is never pooled across trains.</small>
+    </div>
+  </div>
 }
 // Every recovery duration that a named scenario can select, plus the common holds.
 // Including the sampled MTTR values keeps the control in sync with the actual hold.

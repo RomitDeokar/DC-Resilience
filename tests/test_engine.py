@@ -476,3 +476,17 @@ def test_operations_validation_autonomy_and_websocket():
         sample = ws.receive_json()
         assert sample['synthetic'] and sample['state'] == 'CRITICAL'
         assert 'thermal' in [a['id'] for a in sample['alerts']]
+
+
+def test_hazard_grid_endpoint_is_a_small_architecture_hazard_sweep():
+    from backend.models import Facility
+    c = Facility(simulation={'num_trials': 200, 'seed': 7})
+    r = client.post('/api/hazard-grid', json=c.model_dump())
+    assert r.status_code == 200
+    body = r.json()
+    assert body['multipliers'] == [1, 5, 20]
+    assert [row['architecture'] for row in body['rows']] == ['N', 'N+1', '2N']
+    assert all(len(row['cells']) == 3 for row in body['rows'])
+    # 20x hazard must not reduce downtime relative to 1x.
+    for row in body['rows']:
+        assert row['cells'][2]['annual_downtime_minutes'] >= row['cells'][0]['annual_downtime_minutes']

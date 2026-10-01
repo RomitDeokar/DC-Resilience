@@ -119,3 +119,90 @@ input,select{height:36px;font-size:12.5px}
 /* Time-proportional replay speed control. */
 .replay-speed{display:inline-flex;gap:4px;margin-left:2px}
 .replay-speed .button{padding:6px 9px;min-height:30px;font-size:11px}
+
+/* A/B train schematic for 2N: two complete, independent paths. */
+.train-view{padding:6px 22px 18px}
+.train-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.train-column{border:1px solid var(--line);border-radius:8px;padding:12px;background:#fbfcfd}
+.train-column.down{border-color:#e6b5b7;background:#fdf4f4}
+.train-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.train-header strong{font-size:13px}
+.train-status{font-size:10px;font-weight:600;padding:2px 7px;border-radius:4px}
+.train-status.ok{background:#edf8f3;color:#26876d}
+.train-status.down{background:#fceded;color:#cb4f54}
+.train-chain{display:flex;flex-direction:column;gap:8px}
+.train-stage{display:flex;align-items:center;gap:8px}
+.train-stage-label{font-size:10px;color:#68778b;min-width:92px}
+.train-units{display:flex;flex-wrap:wrap;gap:4px}
+.train-units button{font-size:10px;padding:3px 6px;border:1px solid #dfe3e9;border-radius:4px;background:#fff;font-family:'SFMono-Regular',Consolas,monospace}
+.train-units button.unit-failed{background:#fdf1f1;border-color:#e6b5b7;color:#c0413f;text-decoration:line-through}
+.train-stage.train-it{margin-top:4px;padding-top:8px;border-top:1px dashed #e5e8ed}
+.train-load{margin-top:14px;padding:12px 14px;border:1px solid var(--line);border-radius:8px}
+.train-load.degraded{border-color:#e6b5b7;background:#fdf4f4}
+.train-load-nums{display:flex;flex-wrap:wrap;gap:6px 20px;font-size:11px;color:#68778b}
+.train-load-nums b{color:#263143;font-variant-numeric:tabular-nums;margin-left:4px}
+.load-bar{height:8px;border-radius:5px;background:#eef1f5;margin:9px 0 7px;overflow:hidden}
+.load-bar i{display:block;height:100%;border-radius:5px}
+.train-load small{font-size:10px;color:#7a8696}
+@media(max-width:700px){.train-grid{grid-template-columns:1fr}.train-stage-label{min-width:76px}}
+
+/* Swim-lane year timeline (paper Fig. 3 style) inside trial replay. */
+.year-timeline{padding:0 17px 6px}
+.yt-caption{display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap}
+.yt-rows{display:flex;flex-direction:column;gap:4px;max-height:230px;overflow-y:auto;padding-right:4px}
+.yt-row{display:flex;align-items:center;gap:8px}
+.yt-label{font-size:10px;color:#68778b;width:112px;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.yt-track{position:relative;height:12px;flex:1;background:#f2f4f7;border-radius:3px}
+.yt-track.yt-band{height:9px;background:#eef1f5}
+.yt-fail{position:absolute;top:0;height:100%;background:#e07b52;border-radius:3px;min-width:2px;cursor:pointer}
+.yt-fail:hover{background:#c85f36}
+.yt-deficit{position:absolute;top:0;height:100%;background:#d35257;border-radius:3px;min-width:2px}
+.yt-cursor{position:absolute;top:-2px;bottom:-2px;width:1.5px;background:#263143}
+.yt-axis{display:flex;justify-content:space-between;font-size:9px;color:#9aa5b4;margin-top:6px;padding-left:120px}
+
+/* ============================================================
+   Design system layer — final overrides.
+   Palette tokens, WCAG-AA-ish secondary text and a ≥11px type floor.
+   Health colours (green/amber/red) are kept distinct from the
+   architecture identity colours used in charts.
+   ============================================================ */
+:root{
+  --ink:#263143;        /* primary text */
+  --ink-2:#3f4c5e;      /* strong secondary */
+  --muted:#5d6877;      /* secondary text, ≥4.5:1 on white */
+  --faint:#6b7686;      /* captions */
+  --line:#e5e8ed;       /* borders */
+  --bg:#f7f8fa;         /* canvas */
+  --surface:#ffffff;    /* cards */
+  --accent:#e97343;     /* single primary accent */
+  --green:#218b72;      /* maintained */
+  --amber:#b5732f;      /* limited evidence */
+  --red:#c0413f;        /* service loss */
+  --a:#8191aa; --b:#ec7848; --c:#23947d;  /* architecture identity */
+}
+/* Secondary text at a readable size and contrast. */
+.metric-note,.metric-label,.field-caption,.chart-heading p,.chart-footer,.run-caption,
+.subtle,.evidence-panel>p,.evidence-panel>small,.result-insight p,.inline-note span,
+.inline-note,.data-warning p,.reference-hero p,.source-cards p,.method-grid p,
+.method-columns dd,.method-columns p,.assumptions p,.guide-steps p,.empty-state p,
+.ops-model-note p,.ops-assessment-body p,.ops-disclaimer span,.lab-prompt p{color:var(--muted)}
+.metric-note,.field-caption,.chart-heading p,.chart-footer,.run-caption,.subtle{font-size:11.5px}
+.table-sub,.references-table small,.architecture-stats>div,.lab-metrics .panel>small,
+.capacity-summary span,.replay-event span,.diagnostic-metrics small{font-size:10.5px;color:var(--faint)}
+.eyebrow,.heading-eyebrow{font-size:10px}
+.reference-stats span,.history-summary span{font-size:11px;color:var(--faint)}
+.page-footer,.research-credit,.research-credit small{color:var(--muted)}
+.page-footer{font-size:11px}
+/* Tabular figures for every headline metric. */
+.metric>strong,.architecture-card>strong,.capacity-summary strong,.lab-metrics strong,
+.reference-stats b,.history-summary strong,.evidence-stats b,.train-load-nums b{font-variant-numeric:tabular-nums}
+
+/* Architecture x hazard screening heatmap. */
+.heatmap{margin-top:6px}
+.heat-row{display:grid;grid-template-columns:72px repeat(3,minmax(0,1fr));gap:8px;margin-bottom:8px;align-items:center}
+.heat-head b{font-size:11px;color:var(--muted);text-align:center;font-weight:600}
+.heat-arch{font-size:12px;font-weight:700;color:var(--ink-2)}
+.heat-cell{border-radius:6px;padding:14px 8px;text-align:center;font-size:15px;font-weight:700;font-variant-numeric:tabular-nums}
+.heat-cell small{font-size:9px;font-weight:600;margin-left:3px;opacity:.8}
+.heat-legend{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:10.5px;color:var(--muted);margin-top:6px}
+.heat-legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:5px;vertical-align:-2px;border:1px solid var(--line)}
