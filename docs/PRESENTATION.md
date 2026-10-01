@@ -120,6 +120,15 @@ different, smaller risk and costs roughly double.
   histogram shows **outage years only** (no-outage mass reported separately so rare severe years
   stay visible), and an **exact exceedance curve** P(downtime > x) with the SLA budget line
   exposes the severe tail.
+- **A/B train view** — when power/cooling are 2N, the schematic switches to two parallel *complete*
+  trains with per-train status and a demand / served / unmet load bar. Capacity is never pooled
+  into boxes, so the paper's "no cross-ties" rule is visible.
+- **Swim-lane year timeline** — replay shows one row per failing component with failure bars and a
+  shaded service-deficit band (paper Fig. 3 style), with a click-to-jump cursor.
+- **Hazard heatmap** — an on-demand architecture × hazard screening grid (paper Table VI style).
+- **Paper baseline preset** — one click sets infrastructure-only, 10,000 trials, seed 42.
+- **Cross-tie toggle** — explicit opt-in only (default off), so the published seeded results stay
+  reproducible; enabling it pools power capacity across 2N trains.
 - **Evidence panel** — any-outage risk interval, SLA-breach risk interval, annual SLA budget,
   unserved energy, and a clear "insufficient evidence" state.
 - **Diagnostics** — actual ±50% one-at-a-time rate reruns (tornado chart), independent vs
@@ -190,6 +199,14 @@ regression-tested** (backend suite 53 → **59 passing**; browser suite **8 pass
 | 24 | Charts hid the story (identical near-100% bars; invisible histogram tail) | Log downtime + CI whiskers, split histogram, exact exceedance curve |
 | 25 | Replay stepped every event after a fixed 850 ms ("not time-proportional") | Time-proportional playback with 1×/4×/16× and reduced-motion support |
 | 26 | INR "Planning budget" headline KPI (paper excludes money) | Replaced with **any-outage risk** + exact interval |
+| 27 | 2N drawn as pooled boxes; key A/B idea invisible | **A/B train view** with per-train completeness + demand/served/unmet bar |
+| 28 | Replay had no year overview of overlapping outages | **Swim-lane year timeline** (paper Fig. 3 style) |
+| 29 | No architecture × hazard view; DCIM PUE autoscaled | **Hazard heatmap** endpoint + fixed PUE axis |
+| 30 | 15 nav items in two catch-all groups; repeated page template | Regrouped to **Design / Facility / Simulate & compare / Analyse & operate / Library**; "New experiment" only where it applies |
+| 31 | 816 ad-hoc colours, sub-11px text, low-contrast greys | **Design tokens**, ~11px type floor, AA-ish secondary text, tabular figures |
+| 32 | Multi-MB JSON uncompressed | **gzip** middleware |
+| 33 | 2N cross-tie rule not toggleable | **Opt-in cross-tie** flag (default off) — engine test added |
+| 34 | No one-click paper configuration | **Paper baseline preset** (infrastructure-only, 10k, seed 42) |
 
 **Reproducibility guarantee:** the seeded engine output is **byte-identical** to before the
 hardening — re-run produced **N 1,889.29 · N+1 5.21 · 2N 5.78 min/yr**, matching the paper.
@@ -215,8 +232,8 @@ hardening — re-run produced **N 1,889.29 · N+1 5.21 · 2N 5.78 min/yr**, matc
 
 ## 9. Roadmap / future scope
 
-- **Cross-tie toggle** for 2N (highest-value model addition).
-- **Paper mode preset** — frozen infrastructure-only config + all five scenarios + seeds pooled 30k.
+- **Full paper-study run mode** — the "paper baseline" preset covers the headline configuration;
+  a pooled 3-seed × 5-scenario × 30k-trial batch (async job) is still to build.
 - **Utility/battery/generator dynamics**: utility outages, failure-to-start per demand,
   start/transfer delay, retry limits, fuel exhaustion.
 - **Input-uncertainty propagation** — sample λ from a Gamma posterior (generator conflict is 3.7σ).

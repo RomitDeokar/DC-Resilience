@@ -2,7 +2,7 @@ export type Redundancy = 'N' | 'N+1' | '2N'
 export type Page = 'overview' | 'designer' | 'racks' | 'software' | 'resilience' | 'calculator' | 'dcim' | 'faults' | 'simulation' | 'lab' | 'comparison' | 'history' | 'references' | 'methodology'
 export interface Config {
   facility_name: string; tier_target: 'I' | 'II' | 'III' | 'IV'; it_load_kw: number;
-  power: { redundancy: Redundancy; ups_capacity_kw_each: number; generator_capacity_kw_each: number; pdu_capacity_kw_each: number };
+  power: { redundancy: Redundancy; ups_capacity_kw_each: number; generator_capacity_kw_each: number; pdu_capacity_kw_each: number; cross_tie: boolean };
   cooling: { redundancy: Redundancy; crac_capacity_kw_each: number };
   it: {enabled: boolean; redundancy: Redundancy; server_nodes_required: number};
   maintenance: {enabled: boolean; component_id: string; start_hour: number; duration_hours: number; inject_failure: boolean};
@@ -10,7 +10,7 @@ export interface Config {
   simulation: { dependent_failures: boolean; common_cause_probability: number; common_cause_events_per_year: number; common_cause_duration_hours: number; common_cause_scope: 'bank'|'site'; common_cause_target: 'power'|'application'; diagnostics: boolean; generator_rate_basis: 'published'|'count_exposure'; num_trials: number; simulated_years_per_trial: number; seed: number; failure_mode: 'single' | 'overlapping'; stress_multiplier: 1 | 5 | 20; operating_mode: 'islanded' | 'utility' }
 }
 export const DEFAULT_CONFIG: Config = { facility_name: 'SRM Research Facility', tier_target: 'III', it_load_kw: 10000,
-  power: { redundancy: 'N+1', ups_capacity_kw_each: 2500, generator_capacity_kw_each: 5000, pdu_capacity_kw_each: 2500 },
+  power: { redundancy: 'N+1', ups_capacity_kw_each: 2500, generator_capacity_kw_each: 5000, pdu_capacity_kw_each: 2500, cross_tie: false },
   cooling: { redundancy: 'N+1', crac_capacity_kw_each: 2000 },
   it: {enabled: true, redundancy: 'N+1', server_nodes_required: 12},
   maintenance: {enabled: false, component_id: 'UPS-A01', start_hour: 1000, duration_hours: 4, inject_failure: false},

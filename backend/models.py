@@ -14,6 +14,9 @@ class Power(StrictModel):
     ups_capacity_kw_each: float = Field(2500, ge=100, le=50000)
     generator_capacity_kw_each: float = Field(5000, ge=100, le=100000)
     pdu_capacity_kw_each: float = Field(2500, ge=100, le=50000)
+    # Explicit opt-in only. Default False keeps the paper's published "no cross-ties"
+    # rule and its seeded results unchanged.
+    cross_tie: bool = False
 
 class Cooling(StrictModel):
     redundancy: Redundancy = 'N+1'
@@ -178,8 +181,13 @@ class CapacityTracker:
             self.failed.discard(cid)
 
     def capacities(self):
-        # Select a complete train; never pool capacity across disconnected paths.
-        power = max(min(self.banks[k][b] for k in self.power_kinds) for b in ['A', 'B'])
+        # Default: select a complete train; never pool capacity across disconnected
+        # paths. An explicit cross_tie (off by default) instead pools each power kind
+        # across both trains, so a degraded train can be fed from the other.
+        if self.config.power.cross_tie:
+            power = min(sum(self.banks[k].values()) for k in self.power_kinds)
+        else:
+            power = max(min(self.banks[k][b] for k in self.power_kinds) for b in ['A', 'B'])
         cooling = max(self.banks['CRAC'].values())
         it_capacity = self.it_capacity()
         surviving = min(power, cooling, it_capacity)

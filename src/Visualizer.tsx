@@ -53,7 +53,7 @@ function TrainSchematic({state, config, failed, onToggle, disabled}: {state: Fac
     <div className={`train-load ${state.service_maintained?'':'degraded'}`}>
       <div className="train-load-nums"><span>Demand <b>{number(demand)} kW</b></span><span>Served <b>{number(served)} kW</b></span><span>Unmet <b className={unmet?'text-red':'text-green'}>{number(unmet)} kW</b></span><span>Limiting group <b>{labels[limiting?.kind]||limiting?.kind||'—'}</b></span></div>
       <div className="load-bar"><i style={{width:`${Math.min(100,served/demand*100)}%`,background:state.service_maintained?'var(--green)':'var(--red)'}}/></div>
-      <small>No cross-ties: each train must be complete on its own; capacity is never pooled across trains.</small>
+      <small>{config.power.cross_tie?'Cross-ties enabled: degraded trains may draw power from the other train. This is not the paper’s published model.':'No cross-ties: each train must be complete on its own; capacity is never pooled across trains.'}</small>
     </div>
   </div>
 }

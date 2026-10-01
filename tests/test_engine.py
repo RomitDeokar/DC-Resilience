@@ -490,3 +490,15 @@ def test_hazard_grid_endpoint_is_a_small_architecture_hazard_sweep():
     # 20x hazard must not reduce downtime relative to 1x.
     for row in body['rows']:
         assert row['cells'][2]['annual_downtime_minutes'] >= row['cells'][0]['annual_downtime_minutes']
+
+
+def test_cross_tie_is_opt_in_and_pools_power_across_trains():
+    from backend.models import Facility, topology, capacity_state
+    failed = {'UPS-A01', 'UPS-A02', 'UPS-B01', 'UPS-B02'}
+    indep = Facility(power={'redundancy': '2N', 'cross_tie': False})
+    tied = Facility(power={'redundancy': '2N', 'cross_tie': True})
+    assert not capacity_state(indep, topology(indep), failed)['service_maintained']
+    assert capacity_state(tied, topology(tied), failed)['service_maintained']
+    # Default stays off, so N+1 behaviour is unchanged by the new flag.
+    n = Facility(power={'redundancy': 'N+1'})
+    assert capacity_state(n, topology(n), {'UPS-A01'})['service_maintained']
