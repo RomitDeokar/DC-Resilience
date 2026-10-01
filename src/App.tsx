@@ -9,7 +9,7 @@ import { ResultsDashboard, Comparison } from './Analytics'
 import { References, Methodology } from './Reference'
 import { api } from './api'
 import { deleteRun, exportRun, loadRuns, saveRun } from './exports'
-import { availability, DEFAULT_CONFIG, number, configError, normalizeConfig, inr, type Config, type FacilityState, type Page, type Rate, type Run, type Progress } from './types'
+import { availability, DEFAULT_CONFIG, stableJson, number, configError, normalizeConfig, inr, type Config, type FacilityState, type Page, type Rate, type Run, type Progress } from './types'
 
 const OPS_NAV = [{id:'overview',label:'Operations overview',icon:LayoutDashboard},{id:'designer',label:'Infrastructure designer',icon:SlidersHorizontal},{id:'racks',label:'Rack floor planner',icon:Grid3X3},{id:'software',label:'Software stack & threats',icon:Layers},{id:'resilience',label:'Resilience assessment',icon:ShieldCheck},{id:'calculator',label:'Capacity calculators',icon:Gauge},{id:'faults',label:'Facility fault explorer',icon:Zap},{id:'dcim',label:'DCIM monitor',icon:Activity}] as const
 const NAV = [{id:'simulation',label:'Simulation workspace',icon:LayoutDashboard},{id:'lab',label:'Live failure lab',icon:Zap},{id:'comparison',label:'Architecture comparison',icon:GitCompareArrows},{id:'history',label:'Run history',icon:History}] as const
@@ -50,7 +50,7 @@ export default function App() {
   const [reportRun,setReportRun] = useState<Run|null>(null)
   const started = useRef(false)
   const activeRun = page==='comparison'?comparison:run
-  const stale = activeRun && JSON.stringify(config)!==JSON.stringify(activeRun.config)
+  const stale = activeRun && stableJson(config)!==stableJson(activeRun.config)
   const nav = (p: Page) => {location.hash=p; setPage(p);setMobileOpen(false);setShowExport(false);window.scrollTo({top:0,behavior:'smooth'})}
 
   async function execute(compare=false, cfg=config, changePage=true) {

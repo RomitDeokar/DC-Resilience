@@ -430,7 +430,8 @@ def test_operations_scenarios_and_sweep_match_applied_design():
         assert response.status_code == 200
     sweep = client.post('/api/operations/sweep', json=d).json()
     assert sweep['baseline_maintained']
-    assert sweep['tested'] == 24
+    # Default design: 2 utility, 2 gen, 1 ATS, 3 UPS, 2 PDU, 1 plant, 3 cooling, 2 ISP, 2 core, 4 dist.
+    assert sweep['tested'] == 22
     vulnerable = {r['component_id'] for r in sweep['results'] if not r['service_maintained']}
     assert {'ats-1', 'plant-1', 'cooling-1'} <= vulnerable
     d.update(ats_units=2, plant_units=2, cooling_units=4)
