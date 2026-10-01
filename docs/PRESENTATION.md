@@ -113,6 +113,13 @@ different, smaller risk and costs roughly double.
   and a hold-duration control.
 - **Trial replay** — step through the **worst simulated year** on an interactive timeline that
   reconciles to the integrated downtime, with a component-state schematic at each instant.
+  **Time-proportional playback** (pause scales with the real simulated gap) with 1×/4×/16× speed
+  and reduced-motion support.
+- **Interval-first charts** — the comparison downtime chart uses a **log axis with 95% CI
+  whiskers** (N is hours, N+1 and 2N are minutes, no longer visually identical), the downtime
+  histogram shows **outage years only** (no-outage mass reported separately so rare severe years
+  stay visible), and an **exact exceedance curve** P(downtime > x) with the SLA budget line
+  exposes the severe tail.
 - **Evidence panel** — any-outage risk interval, SLA-breach risk interval, annual SLA budget,
   unserved energy, and a clear "insufficient evidence" state.
 - **Diagnostics** — actual ±50% one-at-a-time rate reruns (tornado chart), independent vs
@@ -177,6 +184,12 @@ regression-tested** (backend suite 53 → **59 passing**; browser suite **8 pass
 | 18 | Empty `react` build chunk / bundle warnings | Chunking fixed (no warnings, no empty chunk) |
 | 19 | Dev-only deps in production requirements | Split into `requirements-dev.txt` |
 | 20 | Missing `LICENSE`, `CITATION.cff`, CI, Playwright config | Added (CI runs backend tests, build, and the browser suite) |
+| 21 | "Tier chips" implied certification | Renamed to **SLA benchmark** throughout |
+| 22 | Operations **overview** still used the old 50/100 design | Frontend default aligned to the backend; overview now reads 100/100 |
+| 23 | Decorative copy/avatars/"Live" pill on synthetic data | Plain labels; research/guide links use an icon, not fake initials; telemetry pill reads "Streaming" |
+| 24 | Charts hid the story (identical near-100% bars; invisible histogram tail) | Log downtime + CI whiskers, split histogram, exact exceedance curve |
+| 25 | Replay stepped every event after a fixed 850 ms ("not time-proportional") | Time-proportional playback with 1×/4×/16× and reduced-motion support |
+| 26 | INR "Planning budget" headline KPI (paper excludes money) | Replaced with **any-outage risk** + exact interval |
 
 **Reproducibility guarantee:** the seeded engine output is **byte-identical** to before the
 hardening — re-run produced **N 1,889.29 · N+1 5.21 · 2N 5.78 min/yr**, matching the paper.

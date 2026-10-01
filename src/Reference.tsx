@@ -13,7 +13,7 @@ export function References({rates}: {rates: Rate[]}) {
   </div>
 }
 export function Methodology() {
-  return <div className="methodology-page"><div className="method-hero"><div><span className="eyebrow">THE SCIENCE BEHIND THE SIMULATION</span><h2>Reliability, not guesswork.</h2><p>A reproducible, continuous-time Monte Carlo model for a controlled study of data centre redundancy.</p></div><FlaskConical size={70} strokeWidth={1}/></div><div className="method-grid">{[
+  return <div className="methodology-page"><div className="method-hero"><div><span className="eyebrow">THE SCIENCE BEHIND THE SIMULATION</span><h2>How the simulation works</h2><p>A reproducible, continuous-time Monte Carlo model for a controlled study of data centre redundancy.</p></div><FlaskConical size={70} strokeWidth={1}/></div><div className="method-grid">{[
     ['01','Configure a fair experiment','Hold IT load, per-unit ratings, simulation horizon, operating scenario and seed constant. Only the redundancy architecture changes. Required units = ceil(load / unit capacity).'],
     ['02','Sample hardware and software failures','Each component has exponentially distributed operating lifetimes; OS crashes act on the same host as server hardware faults, with independent cause clocks. Fixed 256-trial batches bound memory; stable source/bank/unit/batch seeds preserve trial prefixes when more trials are requested. Repairs use a constant duration equal to the recorded MTTR.'],
     ['03','Sweep failures and repairs','Events are sorted chronologically. The engine tracks all currently failed units, calculates surviving capacity, and integrates outage intervals exactly—overlapping downtime is never double counted.'],

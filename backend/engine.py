@@ -45,6 +45,24 @@ def exact_probability_interval(count: int, n: int) -> list[float]:
             float(beta.ppf(.975, count+1, n-count)) if count < n else 1.0]
 
 
+_EXCEEDANCE_GRID = [0, 1, 5, 15, 30, 60, 120, 240, 480, 720, 1440, 2880, 4320, 7200, 14400, 28800, 43200, 52560, 105120]
+
+
+def _exceedance(annual_minutes) -> list[dict]:
+    """Exact P(annual downtime > x) at a fixed grid of minute thresholds.
+
+    A single year's distribution is dominated by the "no outage" mass, which hides
+    the interesting tail in a linear histogram. This monotone curve exposes rare,
+    severe years directly.
+    """
+    values = np.asarray(annual_minutes, dtype=float)
+    if values.size == 0:
+        return [{'minutes': 0.0, 'probability': 0.0}]
+    top = float(values.max())
+    thresholds = sorted({t for t in _EXCEEDANCE_GRID if t < top} | {top})
+    return [{'minutes': float(t), 'probability': float(np.mean(values > t))} for t in thresholds]
+
+
 def single_failure_events(events):
     """Controlled baseline: suppress starts until the accepted repair completes."""
     accepted, busy_until = [], -1.0
@@ -331,6 +349,7 @@ def simulate(config: Facility, rate_factors=None, progress=None) -> dict:
         'worst_surviving_capacity_kw': float(np.min(minima)),
         'infra_cost_index': len(components) / base_count, 'component_count': len(components),
         'convergence': convergence, 'histogram': histogram,
+        'exceedance': _exceedance(annual_minutes),
         'failure_breakdown': [{'component': r['label'], 'kind': r['component'], 'failures': failures[r['component']]} for r in RATES],
         'sample_events': sample_events,
         'trial_results': [{'trial_id': i+1, 'availability_percent': float(availability[i]),

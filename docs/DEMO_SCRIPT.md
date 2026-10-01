@@ -97,10 +97,15 @@ Tip: open the browser at **1440×900**, keep one tab. The app starts on **Operat
    - **Estimated availability** KPI and the **evidence badge** ("Mean CI above benchmark" /
      "Insufficient outage evidence"). > "We refuse to show green when the sample is too small."
    - The **Evidence panel**: any-outage risk interval, SLA-breach risk interval, annual SLA budget.
-   - **Trial distribution** tab: the histogram separates the huge "no outage" bar from the rare bad years.
+   - **Trial distribution** tab: the histogram now shows **outage years only** (the huge no-outage
+     count is reported as a number, so the rare severe bars are actually visible), plus an
+     **exceedance curve** — "the chance a year exceeds X minutes of downtime" — with the SLA budget line.
    - **Event samples** tab: individual failure events with cause, time, capacity and service effect.
-   - **Trial replay** tab: step through the worst simulated year, then click
-     **Open live failure lab** / play the timeline. > "Every replay reconciles to the same integrated downtime."
+   - **Trial replay** tab: press **Play replay** and point out the **time-proportional** pacing
+     (quiet periods are long, failure bursts are fast) with **1× / 4× / 16×** speed; scrub or use
+     **Next replay event**. > "Every replay reconciles to the same integrated downtime."
+   - **Architecture comparison** downtime chart: note the **log scale with 95% CI whiskers** —
+     N is hours while N+1 and 2N are minutes, so the trade-off is visible instead of three identical bars.
 3. Click **Export report** → show the four outputs: complete JSON, results CSV, trial-level CSV,
    and the **printable design report** (Print / Save as PDF).
    > "A reviewer can reproduce every number from the exported configuration, dataset version and input fingerprint."
