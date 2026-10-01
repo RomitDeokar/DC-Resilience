@@ -72,3 +72,15 @@ export function normalizeConfig(c: Config): Config {
   return {...structuredClone(DEFAULT_CONFIG),...c, it: c.it??{...DEFAULT_CONFIG.it,enabled:false}, maintenance:{...DEFAULT_CONFIG.maintenance,...c.maintenance},budget:{...DEFAULT_CONFIG.budget,...c.budget},simulation:{...DEFAULT_CONFIG.simulation,...c.simulation}}
 }
 export const inr = (v: number) => new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR',maximumFractionDigits:0}).format(v)
+
+/** Key-order-independent serialisation. The API returns config keys in Pydantic
+ * field order, which differs from DEFAULT_CONFIG, so plain JSON.stringify would
+ * mark every freshly returned run as stale. */
+export function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>
+    return `{${Object.keys(obj).sort().map(k => `${JSON.stringify(k)}:${stableJson(obj[k])}`).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
