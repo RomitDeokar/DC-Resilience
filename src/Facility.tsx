@@ -27,20 +27,31 @@ export function useFacilityModel() {
   const [layout,setLayout]=useState<Layout|null>(null)
   const [services,setServices]=useState<Service[]>([])
   const [loadError,setLoadError]=useState('')
+  // Only a layout+service bundle that the server has validated is persisted. Draft
+  // edits live in memory, so an invalid edit can never replace the last good model.
+  const commit=(nextLayout:Layout,nextServices:Service[])=>{try{localStorage.setItem(STORE,JSON.stringify({layout:nextLayout,services:nextServices}))}catch{/* storage unavailable */}}
   useEffect(()=>{
     let stopped=false
-    try{const saved=localStorage.getItem(STORE);if(saved){const d=JSON.parse(saved);if(d.layout&&Array.isArray(d.services)){setLayout(d.layout);setServices(d.services);return}}}catch{/* fall through to default */}
-    api<{layout:Layout;services:Service[]}>('software/default').then(d=>{if(!stopped){setLayout(d.layout);setServices(d.services)}}).catch(e=>{if(!stopped)setLoadError(err(e))})
+    const loadDefault=()=>api<{layout:Layout;services:Service[]}>('software/default').then(d=>{if(!stopped){setLayout(d.layout);setServices(d.services)}}).catch(e=>{if(!stopped)setLoadError(err(e))})
+    let saved:unknown=null
+    try{saved=JSON.parse(localStorage.getItem(STORE)||'null')}catch{/* corrupt store */}
+    const bundle=saved as {layout?:Layout;services?:Service[]}|null
+    if(bundle?.layout&&Array.isArray(bundle.services)){
+      // Validate persisted state before trusting it; fall back to the reference
+      // model instead of rendering a malformed layout.
+      api('software/evaluate',{layout:bundle.layout,services:bundle.services,threats:[],failed_hosts:[]})
+        .then(()=>{if(!stopped){setLayout(bundle.layout!);setServices(bundle.services!)}})
+        .catch(()=>{if(!stopped)void loadDefault()})
+    } else void loadDefault()
     return()=>{stopped=true}
   },[])
-  useEffect(()=>{if(layout)try{localStorage.setItem(STORE,JSON.stringify({layout,services}))}catch{/* storage unavailable */}},[layout,services])
-  const reset=async()=>{const d=await api<{layout:Layout;services:Service[]}>('software/default');setLayout(d.layout);setServices(d.services)}
-  return {layout,setLayout,services,setServices,loadError,reset}
+  const reset=async()=>{const d=await api<{layout:Layout;services:Service[]}>('software/default');setLayout(d.layout);setServices(d.services);commit(d.layout,d.services)}
+  return {layout,setLayout,services,setServices,loadError,reset,commit}
 }
 
 /* ------------------------------------------------------------ rack planner */
 export function RackPlanner({model,navigate}:{model:ReturnType<typeof useFacilityModel>;navigate:(p:Page)=>void}) {
-  const {layout,setLayout,services,setServices}=model
+  const {layout,setLayout,services,setServices,commit}=model
   const [evaluation,setEvaluation]=useState<LayoutEval|null>(null)
   const [error,setError]=useState('')
   const [selected,setSelected]=useState<string|null>(null)
@@ -50,7 +61,12 @@ export function RackPlanner({model,navigate}:{model:ReturnType<typeof useFacilit
   useEffect(()=>{
     if(!layout)return
     const c=new AbortController();setBusy(true)
-    const t=setTimeout(()=>{api<LayoutEval>('racks/evaluate',layout,c.signal).then(d=>{setEvaluation(d);setError('');setBusy(false)}).catch(e=>{if(e.name!=='AbortError'){setError(err(e));setBusy(false)}})},120)
+    const t=setTimeout(()=>{api<LayoutEval>('racks/evaluate',layout,c.signal).then(d=>{
+      setEvaluation(d);setError('');setBusy(false);commit(layout,services)
+    }).catch(e=>{if(e.name!=='AbortError'){
+      // A rejected edit must not leave the previous healthy metrics on screen.
+      setEvaluation(null);setError(err(e));setBusy(false)
+    }})},120)
     return()=>{clearTimeout(t);c.abort()}
   },[layout])
   if(!layout)return <div className="panel ops-loading"><LoaderCircle className="spin"/>{model.loadError||'Loading floor plan…'}</div>
@@ -64,7 +80,18 @@ export function RackPlanner({model,navigate}:{model:ReturnType<typeof useFacilit
   }
   const removeRack=(id:string)=>{if(!confirm(`Remove ${id} and every device inside it?`))return;const hostIds=new Set(layout.racks.find(r=>r.id===id)?.devices.map(d=>d.id));update(l=>({...l,racks:l.racks.filter(r=>r.id!==id),failed_racks:l.failed_racks.filter(x=>x!==id)}));setServices(s=>s.map(x=>({...x,hosts:x.hosts.filter(h=>!hostIds.has(h))})));setSelected(null)}
   const toggle=(key:'failed_feeds'|'failed_zones'|'failed_racks',value:string)=>update(l=>{const arr=l[key] as string[];const i=arr.indexOf(value);if(i>=0)arr.splice(i,1);else arr.push(value);return l})
-  const importFile=async(f?:File)=>{if(!f)return;try{if(f.size>500000)throw new Error('Layout files must be smaller than 500 KB.');const d=JSON.parse(await f.text());const l:Layout=d.layout??d;await api('racks/evaluate',l);setLayout(l);if(Array.isArray(d.services))setServices(d.services);setSelected(null)}catch(e){setError(err(e))}finally{if(file.current)file.current.value=''}}
+  const importFile=async(f?:File)=>{if(!f)return;try{
+    if(f.size>500000)throw new Error('Layout files must be smaller than 500 KB.')
+    const d=JSON.parse(await f.text())
+    const l:Layout=d.layout??d
+    if(!l||typeof l!=='object'||!Array.isArray(l.racks))throw new Error('The file does not contain a valid rack layout.')
+    if(d.services!==undefined&&!Array.isArray(d.services))throw new Error('The "services" field must be an array.')
+    const nextServices:Service[]=Array.isArray(d.services)?d.services:services
+    // Validate the whole bundle (layout + service objects) server-side before any
+    // state is replaced. A rejected import leaves the current model untouched.
+    await api('software/evaluate',{layout:l,services:nextServices,threats:[],failed_hosts:[]})
+    setLayout(l);setServices(nextServices);commit(l,nextServices);setSelected(null);setError('')
+  }catch(e){setError(err(e))}finally{if(file.current)file.current.value=''}}
   return <div className="fac">
     <div className="fac-toolbar">
       <div className="fac-toolbar-left"><label>Data hall<input value={layout.name} maxLength={80} onChange={e=>update(l=>({...l,name:e.target.value}))}/></label><label>Rows<input type="number" min={1} max={40} value={layout.rows} onChange={e=>update(l=>({...l,rows:Math.max(1,Math.min(40,Number(e.target.value)||1))}))}/></label><label>Columns<input type="number" min={1} max={60} value={layout.cols} onChange={e=>update(l=>({...l,cols:Math.max(1,Math.min(60,Number(e.target.value)||1))}))}/></label></div>
@@ -95,7 +122,7 @@ export function RackPlanner({model,navigate}:{model:ReturnType<typeof useFacilit
         {!!evaluation?.warnings.length&&<div className="fac-warnings">{evaluation.warnings.map((w,i)=><div key={i}><AlertTriangle size={13}/>{w}</div>)}</div>}
       </section>
       <aside className="fac-side">
-        {rack?<RackEditor rack={rack} evaluation={evalById.get(rack.id)} failed={layout.failed_racks.includes(rack.id)} services={services} onChange={next=>update(l=>{const i=l.racks.findIndex(r=>r.id===rack.id);l.racks[i]=next;return l})} onMove={()=>setMoving(rack.id)} onRemove={()=>removeRack(rack.id)} onToggleFail={()=>toggle('failed_racks',rack.id)} onClose={()=>setSelected(null)}/>
+        {rack?<RackEditor rack={rack} evaluation={evalById.get(rack.id)} failed={layout.failed_racks.includes(rack.id)} services={services} onDeviceRemoved={id=>setServices(s=>s.map(x=>({...x,hosts:x.hosts.filter(h=>h!==id)})))} onChange={next=>update(l=>{const i=l.racks.findIndex(r=>r.id===rack.id);l.racks[i]=next;return l})} onMove={()=>setMoving(rack.id)} onRemove={()=>removeRack(rack.id)} onToggleFail={()=>toggle('failed_racks',rack.id)} onClose={()=>setSelected(null)}/>
         :<div className="fac-empty"><Server size={26}/><h3>No rack selected</h3><p>Select a rack on the floor to view its elevation, edit devices, change its power feed or cooling zone, or take it offline.</p><p className="subtle">{busy?'Evaluating layout…':evaluation?.note}</p><button className="button" onClick={()=>navigate('software')}>Open software stack <ArrowLeft size={13} style={{transform:'rotate(180deg)'}}/></button></div>}
       </aside>
     </div>
@@ -118,7 +145,7 @@ function RowCells({row,layout,evalById,selected,moving,onClick}:{row:number;layo
   </>
 }
 
-function RackEditor({rack,evaluation,failed,services,onChange,onMove,onRemove,onToggleFail,onClose}:{rack:Rack;evaluation?:RackEval;failed:boolean;services:Service[];onChange:(r:Rack)=>void;onMove:()=>void;onRemove:()=>void;onToggleFail:()=>void;onClose:()=>void}) {
+function RackEditor({rack,evaluation,failed,services,onDeviceRemoved,onChange,onMove,onRemove,onToggleFail,onClose}:{rack:Rack;evaluation?:RackEval;failed:boolean;services:Service[];onDeviceRemoved:(id:string)=>void;onChange:(r:Rack)=>void;onMove:()=>void;onRemove:()=>void;onToggleFail:()=>void;onClose:()=>void}) {
   const [device,setDevice]=useState<string|null>(null)
   const [addKind,setAddKind]=useState<DeviceKind>('compute')
   useEffect(()=>setDevice(null),[rack.id])
@@ -143,7 +170,7 @@ function RackEditor({rack,evaluation,failed,services,onChange,onMove,onRemove,on
     <div className="fac-elevation-head"><h4>Rack elevation</h4><div><select value={addKind} onChange={e=>setAddKind(e.target.value as DeviceKind)}>{(Object.keys(KIND_META) as DeviceKind[]).map(k=><option key={k} value={k}>{KIND_META[k].label} · {KIND_META[k].u}U</option>)}</select><button className="button primary" onClick={addDevice}><Plus size={13}/>Add</button></div></div>
     <div className="fac-elevation">{Array.from({length:rack.height_u},(_,i)=>rack.height_u-i).map(u=>{const d=slots[u-1];const top=d&&d.u_position+d.height_u-1===u;if(d&&!top)return null;const K=d?KIND_META[d.kind].icon:null;return <div key={u} className={`fac-u ${d?`dev ${d.kind} ${device===d.id?'selected':''} ${!d.patched?'unpatched':''}`:''}`} style={d?{gridRow:`span ${Math.min(d.height_u,u)}`}:undefined} onClick={()=>d&&setDevice(d.id)} role={d?'button':undefined} tabIndex={d?0:undefined} onKeyDown={e=>{if(d&&(e.key==='Enter'||e.key===' ')){e.preventDefault();setDevice(d.id)}}}><span className="fac-u-num">{u}</span>{d&&K&&<><K size={12}/><span className="fac-u-name">{d.name}</span><span className="fac-u-meta">{d.height_u}U · {number(d.power_kw,2)} kW</span></>}</div>})}</div>
     {dev&&<div className="fac-device">
-      <div className="fac-editor-head"><div><h4>{dev.name}</h4><p className="mono">{dev.id}</p></div><button className="button" onClick={()=>{onChange({...rack,devices:rack.devices.filter(d=>d.id!==dev.id)});setDevice(null)}}><Trash2 size={13}/>Remove</button></div>
+      <div className="fac-editor-head"><div><h4>{dev.name}</h4><p className="mono">{dev.id}</p></div><button className="button" onClick={()=>{onChange({...rack,devices:rack.devices.filter(d=>d.id!==dev.id)});onDeviceRemoved(dev.id);setDevice(null)}}><Trash2 size={13}/>Remove</button></div>
       <div className="fac-form two">
         <label>Name<input value={dev.name} maxLength={60} onChange={e=>updateDevice({...dev,name:e.target.value})}/></label>
         <label>Type<select value={dev.kind} onChange={e=>updateDevice({...dev,kind:e.target.value as DeviceKind})}>{(Object.keys(KIND_META) as DeviceKind[]).map(k=><option key={k} value={k}>{KIND_META[k].label}</option>)}</select></label>
@@ -161,7 +188,7 @@ function RackEditor({rack,evaluation,failed,services,onChange,onMove,onRemove,on
 
 /* ---------------------------------------------------------- software stack */
 export function SoftwareStack({model,navigate}:{model:ReturnType<typeof useFacilityModel>;navigate:(p:Page)=>void}) {
-  const {layout,services,setServices}=model
+  const {layout,services,setServices,commit}=model
   const [catalog,setCatalog]=useState<Catalog|null>(null)
   const [threats,setThreats]=useState<Threat[]>([])
   const [failedHosts,setFailedHosts]=useState<string[]>([])
@@ -176,7 +203,9 @@ export function SoftwareStack({model,navigate}:{model:ReturnType<typeof useFacil
   useEffect(()=>{
     if(!layout)return
     const c=new AbortController()
-    const t=setTimeout(()=>{api<SoftwareEval>('software/evaluate',{layout,services,threats,failed_hosts:failedHosts,...controls},c.signal).then(d=>{setResult(d);setError('')}).catch(e=>{if(e.name!=='AbortError')setError(err(e))})},120)
+    const t=setTimeout(()=>{api<SoftwareEval>('software/evaluate',{layout,services,threats,failed_hosts:failedHosts,...controls},c.signal).then(d=>{
+      setResult(d);setError('');commit(layout,services)
+    }).catch(e=>{if(e.name!=='AbortError'){setResult(null);setError(err(e))}})},120)
     return()=>{clearTimeout(t);c.abort()}
   },[layout,services,threats,failedHosts,controls])
   if(!layout)return <div className="panel ops-loading"><LoaderCircle className="spin"/>{model.loadError||'Loading software model…'}</div>

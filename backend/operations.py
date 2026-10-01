@@ -36,14 +36,17 @@ class Design(StrictModel):
     generator_capacity_kw: float = Field(800, gt=0, le=100000)
     fuel_hours: float = Field(48, ge=0, le=720)
     battery_minutes: float = Field(15, ge=0, le=240)
-    ats_units: int = Field(1, ge=1, le=8)
+    # Defaults are internally consistent with N+1: 2 ATS (one is a single point of
+    # failure), a redundant chilled-water plant and enough cooling units to cover
+    # IT + losses after one unit is lost. A default design must pass its own checks.
+    ats_units: int = Field(2, ge=1, le=8)
     pdu_units: int = Field(2, ge=1, le=24)
     pdu_capacity_kw: float = Field(600, gt=0, le=100000)
-    plant_units: int = Field(1, ge=1, le=8)
+    plant_units: int = Field(2, ge=1, le=8)
     plant_capacity_kw: float = Field(1000, gt=0, le=100000)
     cooling_architecture: Literal['Chilled water', 'Air cooled', 'In-row cooling'] = 'Chilled water'
     cooling_redundancy: Architecture = 'N+1'
-    cooling_units: int = Field(3, ge=1, le=24)
+    cooling_units: int = Field(4, ge=1, le=24)
     cooling_capacity_kw: float = Field(250, gt=0, le=100000)
     power_losses_kw: float = Field(50, ge=0, le=50000)
     supply_temp_c: float = Field(22, ge=15, le=35)

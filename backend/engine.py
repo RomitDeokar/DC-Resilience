@@ -9,6 +9,9 @@ from .models import Facility, TIERS, topology, capacity_state, CapacityTracker
 
 RATES = json.loads((Path(__file__).resolve().parent.parent / 'data/failure_rates.json').read_text())
 RATE_MAP = {r['component']: r for r in RATES}
+# Explicit, frozen stream ids. Deriving them from file order would silently change
+# every seeded result whenever a rate row is reordered or inserted.
+STREAM_IDS = {r['component']: int(r.get('stream', index)) for index, r in enumerate(RATES)}
 DATASET_VERSION = '2026-09-12-audited-assumptions-v2'
 ENGINE_VERSION = '2.3.0'
 MODEL_NOTES = [
@@ -129,7 +132,9 @@ def event_durations(events):
 def rate_value(config, kind, factors):
     value = RATE_MAP[kind]['failure_rate_per_year']
     if kind == 'GENERATOR' and config.simulation.generator_rate_basis == 'count_exposure':
-        value = 115 / 266
+        # Alternative interpretation kept in the dataset (provenance stays data-driven).
+        alt = RATE_MAP[kind].get('alternative_rate')
+        value = alt['failures'] / alt['exposure_unit_years'] if alt else 115 / 266
     return value * factors.get(kind, 1)
 
 
@@ -152,7 +157,7 @@ def event_batches(config, groups, rate_factors=None):
                 for c in group['components']:
                     bank = 0 if c['bank'] == 'A' else 1
                     unit = int(c['id'].split('-')[1][1:])
-                    rng = np.random.default_rng(np.random.SeedSequence([sim.seed, list(RATE_MAP).index(kind), bank, unit, offset]))
+                    rng = np.random.default_rng(np.random.SeedSequence([sim.seed, STREAM_IDS[kind], bank, unit, offset]))
                     times = rng.exponential(8760 / annual, 256)
                     active = np.flatnonzero(times < hours)
                     while active.size:

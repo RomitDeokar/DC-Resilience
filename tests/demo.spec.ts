@@ -8,6 +8,13 @@ const url = process.env.DC_TEST_URL || 'http://127.0.0.1:8000'
 test.setTimeout(120000)
 test.use({ viewport: { width: 1440, height: 1000 } })
 
+// The landing page is the operations overview; the experiment configuration
+// (presets, trials, run button) lives inside a research workspace.
+async function openWorkspace(page: import('@playwright/test').Page, label = 'Simulation workspace') {
+  await page.goto(url)
+  await page.getByRole('button', { name: label, exact: true }).click()
+}
+
 test('CSV cells neutralize formulas and preserve signed numeric deltas', () => {
   expect(csvCell(' =HYPERLINK("bad")')).toBe('"\' =HYPERLINK(""bad"")"')
   expect(csvCell('\t=1+1')).toBe('"\'\t=1+1"')
@@ -31,9 +38,9 @@ test('client and API agree on the compute budget', async ({request}) => {
 test('comparison exports JSON, both CSVs and a printable PDF; history restores', async ({page}, info) => {
   const errors: string[]=[]
   page.on('pageerror',e=>errors.push(e.message))
-  await page.goto(url)
+  await openWorkspace(page,'Architecture comparison')
+  await page.getByRole('button',{name:'Configure experiment',exact:true}).click()
   await page.locator('#preset').selectOption('quick')
-  await page.getByRole('button',{name:'Architecture comparison',exact:true}).click()
   const responsePromise=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/compare')
   await page.getByRole('button',{name:'Compare architectures',exact:true}).click()
   const response=await responsePromise
@@ -77,7 +84,8 @@ test('comparison exports JSON, both CSVs and a printable PDF; history restores',
 })
 
 test('oversized jobs are blocked before submission and busy responses recover', async ({page}) => {
-  await page.goto(url)
+  await openWorkspace(page)
+  await page.getByRole('button',{name:'Configure experiment',exact:true}).click()
   await page.locator('#trials').selectOption('20000')
   await page.locator('#years').selectOption('5')
   await page.getByRole('button',{name:'Advanced settings',exact:true}).click()
@@ -106,6 +114,7 @@ test('server and OS lab scenarios, dependency and maintenance diagnostics render
   await page.getByRole('button',{name:'Restore all',exact:true}).click()
   await expect(impact.locator('strong')).toHaveText('Protected')
   await page.getByRole('button',{name:'Simulation workspace',exact:true}).click()
+  await page.getByRole('button',{name:'Configure experiment',exact:true}).click()
   for(const preset of ['dependent','software','maintenance-only','maintenance','diagnostics']) {
     await page.locator('#preset').selectOption(preset)
     // Test the real 1,000-trial demo presets, including diagnostics.
@@ -129,7 +138,8 @@ test('server and OS lab scenarios, dependency and maintenance diagnostics render
 
 
 test('completed-trial counters show real diagnostic work and clean up after completion', async ({page}) => {
-  await page.goto(url)
+  await openWorkspace(page)
+  await page.getByRole('button',{name:'Configure experiment',exact:true}).click()
   await page.locator('#preset').selectOption('diagnostics')
   const counter=page.waitForResponse(r=>new URL(r.url()).pathname.startsWith('/api/progress/')&&r.status()===200)
   await page.getByRole('button',{name:'Run simulation',exact:true}).click()
@@ -140,6 +150,19 @@ test('completed-trial counters show real diagnostic work and clean up after comp
   await expect(page.getByRole('progressbar',{name:'Completed trial evaluations'})).toBeVisible()
   await expect(page.getByRole('heading',{name:'Simulation results',exact:true})).toBeVisible()
   await expect(page.getByRole('progressbar',{name:'Completed trial evaluations'})).toHaveCount(0)
+})
+
+test('no page forces the document wider than a 390px viewport', async ({page}) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  for (const hash of ['overview','designer','racks','software','resilience','calculator','faults','dcim','simulation','lab','comparison','history','references','methodology']) {
+    await page.goto(`${url}/#${hash}`)
+    await page.waitForTimeout(700)
+    const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+    }))
+    expect(scrollWidth, `#${hash} overflows (${scrollWidth} > ${clientWidth})`).toBeLessThanOrEqual(clientWidth + 1)
+  }
 })
 
 test('application diagnostics with disabled IT are blocked on client and server', async ({request}) => {

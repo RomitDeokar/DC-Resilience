@@ -7,7 +7,7 @@ import { ConfigPanel } from './ConfigPanel'
 import { FacilityDiagram, FailureLab } from './Visualizer'
 import { ResultsDashboard, Comparison } from './Analytics'
 import { References, Methodology } from './Reference'
-import { api } from './api'
+import { api, ApiError } from './api'
 import { deleteRun, exportRun, loadRuns, saveRun } from './exports'
 import { availability, DEFAULT_CONFIG, stableJson, number, configError, normalizeConfig, inr, type Config, type FacilityState, type Page, type Rate, type Run, type Progress } from './types'
 
@@ -42,6 +42,7 @@ export default function App() {
   const [error,setError] = useState('')
   const [toast,setToast] = useState('')
   const [health,setHealth] = useState(false)
+  const [engineVersion,setEngineVersion] = useState('')
   const [mobileOpen,setMobileOpen] = useState(false)
   const [showExport,setShowExport] = useState(false)
   const [configOpen,setConfigOpen] = useState(false)
@@ -77,7 +78,7 @@ export default function App() {
   }
   useEffect(()=>{
     if(started.current)return;started.current=true
-    api<{status:string}>('health').then(()=>setHealth(true)).catch(()=>setHealth(false))
+    api<{status:string;version:string}>('health').then(d=>{setHealth(true);setEngineVersion(d.version)}).catch(()=>setHealth(false))
     api<{rates:Rate[]}>('failure-rates').then(d=>setRates(d.rates)).catch(e=>setError(String(e)))
     loadRuns().then(runs=>{setHistory(runs.slice(0,12));const s=runs.find(r=>r.kind==='simulation');const c=runs.find(r=>r.kind==='comparison');if(s){setRun(s);setConfig(normalizeConfig(s.config))}if(c)setComparison(c)}).catch(()=>setToast('Browser history is unavailable. You can still run experiments and export results.'))
   },[])
@@ -93,7 +94,13 @@ export default function App() {
       try {
         const state=await api<Progress>(`progress/${jobId}`,undefined,controller.signal)
         if(!stopped){setProgress(state);setProgressConnected(true)}
-      } catch {if(!stopped)setProgressConnected(false)}
+      } catch(e){
+        if(stopped)return
+        setProgressConnected(false)
+        // A finished job returns 404 once its handle is cleaned up. Stop polling
+        // instead of repeating the request until the POST response arrives.
+        if(e instanceof ApiError&&e.status===404)return
+      }
       if(!stopped)timer=setTimeout(poll,500)
     }
     timer=setTimeout(poll,250)
@@ -107,7 +114,7 @@ export default function App() {
     return()=>{clearTimeout(t);controller.abort()}
   },[config])
   useEffect(()=>{const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape'){setShowGuide(false);setShowReport(false);setShowExport(false);setMobileOpen(false)}};window.addEventListener('keydown',onKey);return()=>window.removeEventListener('keydown',onKey)},[])
-  useEffect(()=>{const t=setInterval(()=>{api<{status:string}>('health').then(()=>setHealth(true)).catch(()=>setHealth(false))},30000);return()=>clearInterval(t)},[])
+  useEffect(()=>{const t=setInterval(()=>{api<{status:string;version:string}>('health').then(d=>{setHealth(true);setEngineVersion(d.version)}).catch(()=>setHealth(false))},30000);return()=>clearInterval(t)},[])
   useEffect(()=>{
     if(!showGuide&&!showReport)return
     const previous=document.activeElement as HTMLElement|null
@@ -158,7 +165,7 @@ export default function App() {
       <div className="workspace-switch"><div className="workspace-avatar"><Server size={17}/></div><div><strong>Engineering workspace</strong><span>SRM IST · Academic project</span></div><span className="workspace-badge">01</span></div>
       <div className="nav-label">FACILITY OPERATIONS</div><nav aria-label="Facility operations">{OPS_NAV.map(item=><button key={item.id} className={`nav-item ${page===item.id?'active':''}`} aria-current={page===item.id?'page':undefined} onClick={()=>nav(item.id)}><item.icon size={18}/><span>{item.label}</span>{item.id==='dcim'&&<i className="nav-live"/>}</button>)}</nav><div className="nav-label ops-nav-label">RELIABILITY RESEARCH</div><nav aria-label="Main navigation">{NAV.map(item=><button key={item.id} className={`nav-item ${page===item.id?'active':''}`} onClick={()=>nav(item.id)}><item.icon size={18}/><span>{item.label}</span>{item.id==='lab'&&<i className="nav-live"/>}{item.id==='history'&&history.length>0&&<b>{history.length}</b>}</button>)}</nav>
       <div className="nav-label resources-label">RESOURCES</div><nav aria-label="Resources"><button className={`nav-item ${page==='references'?'active':''}`} onClick={()=>nav('references')}><Database size={18}/><span>Reference library</span></button><button className={`nav-item ${page==='methodology'?'active':''}`} onClick={()=>nav('methodology')}><BookOpen size={18}/><span>Methodology</span></button><a className="nav-item" href="/docs" target="_blank" rel="noreferrer"><Code2 size={18}/><span>API documentation</span><ArrowUpRight size={13}/></a></nav>
-      <div className="sidebar-bottom"><div className="demo-card"><span className="demo-card-icon"><FlaskConical size={17}/></span><strong>Built to test the what-ifs.</strong><p>One failed component can change everything. Put your design to the test.</p><button onClick={()=>{nav('lab');setShowGuide(true)}}>Explore the live demo<ArrowRight size={14}/></button></div><div className="engine-status"><span><i className={health?'online':''}/>{health?'Simulation engine online':'Connecting to engine'}</span><span>v2.4</span></div><button className="user-profile" onClick={()=>nav('methodology')}><div className="avatar">RD</div><div><strong>Romit & Shourya</strong><span>SRM Research Team</span></div><ChevronRight size={15}/></button></div>
+      <div className="sidebar-bottom"><div className="demo-card"><span className="demo-card-icon"><FlaskConical size={17}/></span><strong>Built to test the what-ifs.</strong><p>One failed component can change everything. Put your design to the test.</p><button onClick={()=>{nav('lab');setShowGuide(true)}}>Explore the live demo<ArrowRight size={14}/></button></div>          <div className="engine-status"><span><i className={health?'online':''}/>{health?'Simulation engine online':'Connecting to engine'}</span><span>{engineVersion?`engine ${engineVersion}`:'engine —'}</span></div><button className="user-profile" onClick={()=>nav('methodology')}><div className="avatar">RD</div><div><strong>Romit & Shourya</strong><span>SRM Research Team</span></div><ChevronRight size={15}/></button></div>
     </aside>
     <div className="main-shell"><header className="topbar"><div className="breadcrumbs"><button className="icon-button mobile-menu" aria-label="Open navigation" onClick={()=>setMobileOpen(true)}><Menu size={20}/></button><span>Workspace</span><ChevronRight size={13}/><strong>{TITLES[page][0]}</strong></div><div className="topbar-actions"><span className="research-badge"><span/>RESEARCH DEMO</span><div className="topbar-divider"/><button className="icon-button" aria-label="Open demo guide" title="Demo guide" onClick={()=>setShowGuide(true)}><CircleHelp size={18}/></button><button className="avatar small" title="About the research team" onClick={()=>nav('methodology')}>RD</button></div></header>
     <main id="main-content" tabIndex={-1} className={`main-content page-${page}`}><div className="page-heading"><div><div className="heading-eyebrow"><i/> DC / ENGINEERING CONSOLE</div><h1>{TITLES[page][0]}</h1><p>{TITLES[page][1]}</p></div><div className="heading-actions">{['simulation','comparison'].includes(page)&&<div className="export-container"><button className="button" disabled={!activeRun||busy} onClick={()=>setShowExport(!showExport)} aria-expanded={showExport}><Download size={15}/>Export report<ChevronDown size={13}/></button>{showExport&&<><div className="menu-catcher" onClick={()=>setShowExport(false)}/><div className="export-menu"><button onClick={()=>exportActive('json')}><FileJson size={16}/><div>Complete experiment<small>JSON · parameters, sources & all trials</small></div></button><button onClick={()=>exportActive('csv')}><FileSpreadsheet size={16}/><div>Results summary<small>CSV · comparison-ready results</small></div></button><button onClick={()=>exportActive('trials')}><Database size={16}/><div>Individual trial data<small>CSV · all simulated trials</small></div></button><button onClick={()=>activeRun&&report(activeRun)}><Printer size={16}/><div>Printable design report<small>Print or save as PDF</small></div></button></div></>}</div>}<button className="button dark" disabled={busy||labBusy} onClick={newExperiment}><Plus size={16}/>New experiment</button></div></div>

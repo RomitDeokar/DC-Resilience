@@ -94,3 +94,24 @@ input,select{height:36px;font-size:12.5px}
 @media (max-width:900px){.lab-metrics{grid-template-columns:1fr 1fr;row-gap:16px}.lab-metrics>.panel:nth-child(3){border-left:0;padding-left:0}.capacity-summary.panel{grid-template-columns:1fr 1fr}}
 @media (max-width:600px){.experiment-summary{gap:16px}.experiment-summary strong{font-size:16px}}
 .ops-tools{grid-template-columns:repeat(5,minmax(0,1fr))}@media (max-width:1100px){.ops-tools{grid-template-columns:repeat(3,minmax(0,1fr))}}@media (max-width:700px){.ops-tools{grid-template-columns:1fr 1fr}}
+
+/* Error boundary fallback (last-resort guard against a blank application root). */
+.error-boundary{max-width:640px;margin:48px auto;padding:28px}
+.error-boundary h2{font-size:18px;margin-bottom:10px}
+.error-boundary p{font-size:12.5px;line-height:1.8;color:#66758a}
+.error-boundary-actions{display:flex;gap:10px;margin-top:18px;flex-wrap:wrap}
+
+/* Mobile containment: keep intentional scrolling inside the schematic/table
+   instead of letting the whole page body grow wider than the viewport. */
+@media (max-width:780px){
+  .main-shell,.main-content,.workspace-grid,.workspace-main,.experiment-toolbar,.experiment-summary,.results-heading{min-width:0;max-width:100%}
+  .diagram-heading{flex-wrap:wrap;gap:8px}
+  .facility-diagram,.facility-diagram.single-line,.schematic-lanes,.diagram-content,.diagram-footer{max-width:100%;min-width:0}
+  .schematic-lanes{overflow-x:auto}
+  .schematic-lane{min-width:0}
+  .lane-stages{flex-wrap:wrap}
+  .stage-units{flex-wrap:wrap}
+  .table-scroll,.fac-grid-scroll{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .context-bar>div{min-width:0}
+  .context-bar>div>span,.context-bar>div>button{min-width:0;overflow-wrap:anywhere}
+}

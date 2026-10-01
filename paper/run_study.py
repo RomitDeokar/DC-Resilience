@@ -36,9 +36,26 @@ def interval(k, n):
             float(beta.ppf(.975, k+1, n-k)) if k < n else 1]
 
 
+def source_fingerprint() -> str:
+    """Engine + dataset hash, independent of the per-run config."""
+    return hashlib.sha256(json.dumps({
+        'engine': ENGINE_VERSION, 'dataset': DATASET_VERSION,
+        'engine_sha256': hashlib.sha256((ROOT / 'backend/engine.py').read_bytes()).hexdigest(),
+        'rates_sha256': hashlib.sha256((ROOT / 'data/failure_rates.json').read_bytes()).hexdigest(),
+    }, sort_keys=True).encode()).hexdigest()
+
+
+def run_fingerprint(config, source: str) -> str:
+    """Complete input fingerprint: config + engine + dataset. A cached file is only
+    reused when its fingerprint matches, so stale outputs cannot be silently reused."""
+    return hashlib.sha256(json.dumps({'config': config.model_dump(), 'source': source},
+                                     sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     records, arrays = [], {}
+    source = source_fingerprint()
     start = time.perf_counter()
     for scenario, overrides in SCENARIOS.items():
         for arch in ARCHS:
@@ -48,14 +65,18 @@ def main():
                     power={'redundancy': arch}, cooling={'redundancy': arch},
                     simulation={'num_trials': 10000, 'seed': seed, **overrides})
                 path = OUT / f'{scenario}_{arch.replace("+", "plus")}_{seed}.json.gz'
+                fingerprint = run_fingerprint(config, source)
+                result = None
                 if path.exists():
                     with gzip.open(path, 'rt') as f:
                         saved = json.load(f)
-                    result = saved['result']
-                else:
+                    if saved.get('fingerprint') == fingerprint:
+                        result = saved['result']
+                if result is None:
                     result = simulate(config)
                     saved = {'config': config.model_dump(), 'engine': ENGINE_VERSION,
-                             'dataset': DATASET_VERSION, 'result': result}
+                             'dataset': DATASET_VERSION, 'fingerprint': fingerprint,
+                             'result': result}
                     with gzip.open(path, 'wt') as f:
                         json.dump(saved, f, separators=(',', ':'))
                 d = np.array([t['annual_downtime_minutes'] for t in result['trial_results']])
@@ -98,7 +119,7 @@ def main():
                 continue
             state = capacity_state(c, topology(c), set(failed))
             injections.append({'architecture':arch,'case':name,'capacity_kw':state['surviving_capacity_kw']})
-    meta = {'engine': ENGINE_VERSION, 'dataset': DATASET_VERSION,
+    meta = {'engine': ENGINE_VERSION, 'dataset': DATASET_VERSION, 'source_fingerprint': source,
             'source_commit': subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),
             'engine_sha256': hashlib.sha256((ROOT/'backend/engine.py').read_bytes()).hexdigest(),
             'rates_sha256': hashlib.sha256((ROOT/'data/failure_rates.json').read_bytes()).hexdigest(),
